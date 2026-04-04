@@ -216,10 +216,16 @@ class ModernECGMainWindow:
         ecg_content = self.ecg_panel.get_content_frame()
         
         # ECG Plot with performance optimization
-        plot_frame = ctk.CTkFrame(ecg_content, fg_color=BG_LIGHT, corner_radius=RADII["large"])
+        plot_frame = ctk.CTkFrame(ecg_content, fg_color=BG_LIGHT, corner_radius=LAYOUT["radius_lg"])
         plot_frame.pack(fill="both", expand=True, pady=(0, 10))
         
-        self.ecg_plot = OptimizedECGPlotter(plot_frame, width=800, height=300)
+        self.ecg_plot = OptimizedECGPlotter(
+            plot_frame,
+            width=800,
+            height=340,
+            sample_rate=250,
+            time_window_sec=10,
+        )
         
         # Control panel
         self.create_control_panel(ecg_content)
@@ -305,36 +311,42 @@ class ModernECGMainWindow:
         
         stats_content = stats_card.get_content_frame()
         
-        # Statistics grid
         stats_grid = ctk.CTkFrame(stats_content, fg_color="transparent")
         stats_grid.pack(fill="x")
         
-        # Configure grid
-        stats_grid.grid_columnconfigure((0, 1, 2), weight=1)
-        
-        # Heart rate
-        hr_frame = ctk.CTkFrame(stats_grid, fg_color=BG_LIGHT, corner_radius=8)
+        for column in range(4):
+            stats_grid.grid_columnconfigure(column, weight=1)
+
+        hr_frame, self.hr_label = self.create_metric_tile(stats_grid, "Heart Rate", "-- BPM", SUCCESS_GREEN)
         hr_frame.grid(row=0, column=0, padx=(0, 5), pady=5, sticky="ew")
-        
-        ctk.CTkLabel(hr_frame, text="Heart Rate", font=ctk.CTkFont(size=10), text_color=TEXT_GRAY).pack(pady=(5, 0))
-        self.hr_label = ctk.CTkLabel(hr_frame, text="-- BPM", font=ctk.CTkFont(size=16, weight="bold"), text_color=SUCCESS_GREEN)
-        self.hr_label.pack(pady=(0, 5))
-        
-        # Signal quality
-        quality_frame = ctk.CTkFrame(stats_grid, fg_color=BG_LIGHT, corner_radius=8)
-        quality_frame.grid(row=0, column=1, padx=2.5, pady=5, sticky="ew")
-        
-        ctk.CTkLabel(quality_frame, text="Signal Quality", font=ctk.CTkFont(size=10), text_color=TEXT_GRAY).pack(pady=(5, 0))
-        self.quality_label = ctk.CTkLabel(quality_frame, text="--", font=ctk.CTkFont(size=16, weight="bold"), text_color=TEXT_WHITE)
-        self.quality_label.pack(pady=(0, 5))
-        
-        # Data count
-        count_frame = ctk.CTkFrame(stats_grid, fg_color=BG_LIGHT, corner_radius=8)
-        count_frame.grid(row=0, column=2, padx=(5, 0), pady=5, sticky="ew")
-        
-        ctk.CTkLabel(count_frame, text="Data Points", font=ctk.CTkFont(size=10), text_color=TEXT_GRAY).pack(pady=(5, 0))
-        self.count_label = ctk.CTkLabel(count_frame, text="0", font=ctk.CTkFont(size=16, weight="bold"), text_color=TEXT_WHITE)
-        self.count_label.pack(pady=(0, 5))
+
+        rhythm_frame, self.rhythm_label = self.create_metric_tile(stats_grid, "Rhythm", "Awaiting data", TEXT_WHITE)
+        rhythm_frame.grid(row=0, column=1, padx=2.5, pady=5, sticky="ew")
+
+        quality_frame, self.quality_label = self.create_metric_tile(stats_grid, "Signal Quality", "Awaiting data", TEXT_WHITE)
+        quality_frame.grid(row=0, column=2, padx=2.5, pady=5, sticky="ew")
+
+        range_frame, self.range_label = self.create_metric_tile(stats_grid, "Trace Range", "--", TEXT_WHITE)
+        range_frame.grid(row=0, column=3, padx=(5, 0), pady=5, sticky="ew")
+
+    def create_metric_tile(self, parent, title: str, value: str, value_color: str = TEXT_WHITE):
+        """Create a compact metric tile used across the clinician dashboard."""
+        tile = ctk.CTkFrame(parent, fg_color=BG_LIGHT, corner_radius=8)
+        ctk.CTkLabel(
+            tile,
+            text=title,
+            font=ctk.CTkFont(size=10),
+            text_color=TEXT_GRAY
+        ).pack(pady=(6, 0))
+        value_label = ctk.CTkLabel(
+            tile,
+            text=value,
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=value_color,
+            justify="center"
+        )
+        value_label.pack(pady=(0, 6), padx=8)
+        return tile, value_label
     
     def create_diagnosis_panel(self):
         """Create AI diagnosis panel"""
@@ -392,8 +404,8 @@ class ModernECGMainWindow:
             border_color=TEXT_GRAY,
             text_color=TEXT_WHITE
         )
-        self.api_url_entry.set("https://api.gptnb.ai/")
         self.api_url_entry.pack(fill="x", pady=(5, 0))
+        self.api_url_entry.insert(0, "https://api.gptnb.ai/")
         
         # Setup button and status
         setup_frame = ctk.CTkFrame(api_content, fg_color="transparent")
@@ -508,35 +520,100 @@ class ModernECGMainWindow:
     
     def create_results_display(self, parent):
         """Create diagnosis results display"""
-        # Tab view for results
         self.results_tabs = ModernTabView(parent)
         self.results_tabs.pack(fill="both", expand=True)
         
-        # Current diagnosis tab
         self.results_tabs.add("Current")
         current_tab = self.results_tabs.tab("Current")
-        
-        self.current_diagnosis_text = ctk.CTkTextbox(
+
+        overview_frame = ctk.CTkFrame(
             current_tab,
-            font=ctk.CTkFont(family=FONT_FAMILY_MONO, size=FONT_SIZES["small"]),
             fg_color=BG_DARK,
-            text_color=TEXT_WHITE
+            corner_radius=LAYOUT["radius_md"],
+            border_width=1,
+            border_color=CARD_STYLE["border"]
         )
-        self.current_diagnosis_text.pack(fill="both", expand=True, padx=5, pady=5)
-        
-        # History tab
+        overview_frame.pack(fill="x", padx=5, pady=(5, 10))
+
+        overview_header = ctk.CTkFrame(overview_frame, fg_color="transparent")
+        overview_header.pack(fill="x", padx=12, pady=(12, 6))
+
+        self.current_severity_badge = ctk.CTkLabel(
+            overview_header,
+            text="Awaiting analysis",
+            fg_color=BG_LIGHT,
+            corner_radius=999,
+            text_color=TEXT_WHITE,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SIZES["small"], weight="bold")
+        )
+        self.current_severity_badge.pack(side="left", ipadx=10, ipady=3)
+
+        self.current_confidence_label = ctk.CTkLabel(
+            overview_header,
+            text="Confidence --",
+            text_color=TEXT_GRAY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SIZES["small"], weight="bold")
+        )
+        self.current_confidence_label.pack(side="right")
+
+        self.current_primary_label = ctk.CTkLabel(
+            overview_frame,
+            text="Run an ECG analysis to populate the clinical summary.",
+            text_color=TEXT_WHITE,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SIZES["subheading"], weight="bold"),
+            justify="left",
+            anchor="w",
+            wraplength=480
+        )
+        self.current_primary_label.pack(fill="x", padx=12)
+
+        self.current_meta_label = ctk.CTkLabel(
+            overview_frame,
+            text="The current trace metrics update continuously so the doctor can judge rhythm, rate, and signal quality before running AI analysis.",
+            text_color=TEXT_GRAY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SIZES["small"]),
+            justify="left",
+            anchor="w",
+            wraplength=480
+        )
+        self.current_meta_label.pack(fill="x", padx=12, pady=(4, 12))
+
+        summary_metrics = ctk.CTkFrame(current_tab, fg_color="transparent")
+        summary_metrics.pack(fill="x", padx=5, pady=(0, 10))
+        for column in range(4):
+            summary_metrics.grid_columnconfigure(column, weight=1)
+
+        result_hr_frame, self.result_hr_value = self.create_metric_tile(summary_metrics, "Estimated HR", "-- BPM", SUCCESS_GREEN)
+        result_hr_frame.grid(row=0, column=0, padx=(0, 5), pady=5, sticky="ew")
+
+        result_rhythm_frame, self.result_rhythm_value = self.create_metric_tile(summary_metrics, "Rhythm", "Awaiting data", TEXT_WHITE)
+        result_rhythm_frame.grid(row=0, column=1, padx=2.5, pady=5, sticky="ew")
+
+        result_quality_frame, self.result_quality_value = self.create_metric_tile(summary_metrics, "Signal Quality", "Awaiting data", TEXT_WHITE)
+        result_quality_frame.grid(row=0, column=2, padx=2.5, pady=5, sticky="ew")
+
+        result_window_frame, self.result_window_value = self.create_metric_tile(summary_metrics, "Analysis Window", "--", TEXT_WHITE)
+        result_window_frame.grid(row=0, column=3, padx=(5, 0), pady=5, sticky="ew")
+
+        details_frame = ctk.CTkScrollableFrame(current_tab, fg_color="transparent")
+        details_frame.pack(fill="both", expand=True, padx=5, pady=(0, 5))
+
+        self.findings_text = self.create_result_section(details_frame, "Key Findings", height=120)
+        self.actions_text = self.create_result_section(details_frame, "Immediate Actions", height=110)
+        self.follow_up_text = self.create_result_section(details_frame, "Follow-up and Lifestyle", height=110)
+        self.notes_text = self.create_result_section(details_frame, "Clinical Notes", height=140)
+
         self.results_tabs.add("History")
         history_tab = self.results_tabs.tab("History")
         
         self.history_text = ctk.CTkTextbox(
             history_tab,
-            font=ctk.CTkFont(family=FONT_FAMILY_MONO, size=FONT_SIZES["small"]),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SIZES["small"]),
             fg_color=BG_DARK,
             text_color=TEXT_WHITE
         )
         self.history_text.pack(fill="both", expand=True, padx=5, pady=5)
         
-        # Statistics tab
         self.results_tabs.add("ECG Stats")
         stats_tab = self.results_tabs.tab("ECG Stats")
         
@@ -547,6 +624,81 @@ class ModernECGMainWindow:
             text_color=TEXT_WHITE
         )
         self.ecg_stats_text.pack(fill="both", expand=True, padx=5, pady=5)
+
+        self.set_textbox_content(self.findings_text, "No findings available yet.")
+        self.set_textbox_content(self.actions_text, "Run an ECG analysis to populate immediate actions.")
+        self.set_textbox_content(self.follow_up_text, "Follow-up guidance will appear here after diagnosis.")
+        self.set_textbox_content(self.notes_text, "Comparisons with normal ranges, risk factors, and prognosis notes will appear here.")
+        self.update_clinical_snapshot()
+
+    def create_result_section(self, parent, title: str, height: int = 120):
+        """Create a structured result section with a read-only textbox."""
+        section = ctk.CTkFrame(parent, fg_color=BG_LIGHT, corner_radius=LAYOUT["radius_md"])
+        section.pack(fill="x", pady=(0, 10))
+
+        ctk.CTkLabel(
+            section,
+            text=title,
+            text_color=TEXT_WHITE,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SIZES["body"], weight="bold")
+        ).pack(anchor="w", padx=12, pady=(10, 6))
+
+        textbox = ctk.CTkTextbox(
+            section,
+            height=height,
+            fg_color=BG_DARK,
+            text_color=TEXT_LIGHT,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SIZES["body"]),
+            wrap="word"
+        )
+        textbox.pack(fill="x", padx=12, pady=(0, 12))
+        textbox.configure(state="disabled")
+        return textbox
+
+    def set_textbox_content(self, textbox, text: str):
+        """Update a read-only textbox without exposing editing state to the rest of the UI."""
+        textbox.configure(state="normal")
+        textbox.delete("1.0", "end")
+        textbox.insert("1.0", text.strip() if text else "No data available.")
+        textbox.configure(state="disabled")
+
+    def get_heart_rate_style(self, heart_rate: Optional[float]):
+        """Return display text and color for the heart-rate metric."""
+        if not heart_rate:
+            return "-- BPM", TEXT_GRAY
+        if 60 <= heart_rate <= 100:
+            return f"{heart_rate:.0f} BPM", SUCCESS_GREEN
+        if 50 <= heart_rate <= 110:
+            return f"{heart_rate:.0f} BPM", WARNING_YELLOW
+        return f"{heart_rate:.0f} BPM", ERROR_RED
+
+    def update_clinical_snapshot(self, metrics: Optional[Dict[str, Any]] = None):
+        """Sync real-time strip metrics into both the monitor and diagnosis summary."""
+        metrics = metrics or self.ecg_plot.get_metrics()
+
+        hr_text, hr_color = self.get_heart_rate_style(metrics.get("heart_rate_bpm"))
+        self.hr_label.configure(text=hr_text, text_color=hr_color)
+        self.result_hr_value.configure(text=hr_text, text_color=hr_color)
+
+        rhythm_label = metrics.get("rhythm_label", "Awaiting data")
+        rhythm_color = metrics.get("rhythm_color", TEXT_GRAY)
+        self.rhythm_label.configure(text=rhythm_label, text_color=rhythm_color)
+        self.result_rhythm_value.configure(text=rhythm_label, text_color=rhythm_color)
+
+        quality_label = metrics.get("signal_quality_label", "Awaiting data")
+        quality_color = metrics.get("signal_quality_color", TEXT_GRAY)
+        self.quality_label.configure(text=quality_label, text_color=quality_color)
+        self.result_quality_value.configure(text=quality_label, text_color=quality_color)
+
+        peak_to_peak = metrics.get("peak_to_peak", 0.0)
+        self.range_label.configure(text=f"{peak_to_peak:.0f}", text_color=TEXT_WHITE if peak_to_peak else TEXT_GRAY)
+
+        duration = metrics.get("duration_sec", 0.0)
+        samples = metrics.get("sample_count", 0)
+        if duration > 0 and samples > 0:
+            self.result_window_value.configure(text=f"{duration:.1f}s | {samples}", text_color=TEXT_WHITE)
+        else:
+            self.result_window_value.configure(text="--", text_color=TEXT_GRAY)
     
     def create_footer(self):
         """Create footer with status information"""
@@ -565,11 +717,15 @@ class ModernECGMainWindow:
         
         self.footer_status = ctk.CTkLabel(
             status_frame,
-            text="Status: Ready | Heart Rate: -- BPM | Last Diagnosis: Never",
+            text="Acquisition: Ready | Heart Rate: -- BPM | Last Diagnosis: Never",
             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SIZES["small"]),
             text_color=TEXT_GRAY
         )
         self.footer_status.pack(side="left", pady=10)
+
+        self.footer_acquisition_text = "Ready"
+        self.footer_diagnosis_text = "Last Diagnosis: Never"
+        self.footer_performance_text = ""
         
         # Version info
         version_label = ctk.CTkLabel(
@@ -582,21 +738,11 @@ class ModernECGMainWindow:
     
     def setup_data_processing(self):
         """Setup data processing and timers"""
-        # ECG data processing timer
-        self.data_timer = threading.Timer(0.05, self.process_data_queue)  # 20Hz updates
-        self.data_timer.daemon = True
         self.data_queue = []
         self.data_lock = threading.Lock()
-        
-        # Auto-diagnosis timer
-        self.auto_diagnosis_timer = threading.Timer(1.0, self.check_auto_diagnosis)
-        self.auto_diagnosis_timer.daemon = True
-        self.auto_diagnosis_timer.start()
-        
-        # Statistics update timer
-        self.stats_timer = threading.Timer(1.0, self.update_statistics)
-        self.stats_timer.daemon = True
-        self.stats_timer.start()
+        self.data_after_id = None
+        self.auto_diagnosis_after_id = self.root.after(1000, self.check_auto_diagnosis)
+        self.stats_after_id = self.root.after(1000, self.update_statistics)
         
         # Initial port scan
         self.scan_ports()
@@ -612,6 +758,8 @@ class ModernECGMainWindow:
     def on_closing(self):
         """Handle application closing"""
         try:
+            self.cancel_scheduled_callbacks()
+
             # Stop performance monitoring
             if hasattr(self, 'performance_monitor'):
                 self.performance_monitor.stop_monitoring()
@@ -640,10 +788,27 @@ class ModernECGMainWindow:
     def cleanup(self):
         """Cleanup resources"""
         try:
+            self.cancel_scheduled_callbacks()
             if hasattr(self, 'performance_monitor'):
                 self.performance_monitor.stop_monitoring()
         except Exception as e:
             print(f"Cleanup error: {e}")
+
+    def cancel_scheduled_callbacks(self):
+        """Cancel recurring Tk callbacks so reconnects and shutdown stay stable."""
+        for attr_name in ("data_after_id", "auto_diagnosis_after_id", "stats_after_id"):
+            callback_id = getattr(self, attr_name, None)
+            if callback_id:
+                try:
+                    self.root.after_cancel(callback_id)
+                except Exception:
+                    pass
+                setattr(self, attr_name, None)
+
+    def start_data_processing_loop(self):
+        """Start the Tk-based data queue polling loop if it is not already running."""
+        if self.data_after_id is None:
+            self.data_after_id = self.root.after(50, self.process_data_queue)
     
     # Implementation of core functionality methods
     
@@ -692,13 +857,13 @@ class ModernECGMainWindow:
             
             # Clear previous data
             self.raw_ecg_values.clear()
-            self.ecg_buffer = CircularECGBuffer(max_size=5000)  # Reset buffer
+            self.ecg_buffer.clear()
             self.packets_received = 0
             self.ecg_plot.clear_data()
             
             # Start data processing
             self.serial_handler.start_reading(self.handle_serial_data)
-            self.data_timer.start()
+            self.start_data_processing_loop()
             
             self.update_footer_status(f"Connected to {port}")
             self.show_success("Connection Successful", f"Connected to {port}")
@@ -718,6 +883,12 @@ class ModernECGMainWindow:
             self.stop_recording()
         
         self.serial_handler.disconnect()
+        if self.data_after_id is not None:
+            try:
+                self.root.after_cancel(self.data_after_id)
+            except Exception:
+                pass
+            self.data_after_id = None
         self.connect_btn.configure(text="Connect", state="normal")
         self.record_btn.configure(state="disabled")
         self.connection_status.update_status("disconnected")
@@ -864,20 +1035,25 @@ class ModernECGMainWindow:
         self.diagnose_btn.configure(state="normal", text="Analyze ECG")
         self.diagnosis_status_label.configure(text="Diagnosis completed", text_color=SUCCESS_GREEN)
         
-        # Update footer
         severity = diagnosis.get('severity', 'unknown')
         confidence = diagnosis.get('confidence', 0)
-        self.update_footer_status(f"Diagnosis: {severity} severity ({confidence:.1%} confidence)")
+        self.update_footer_diagnosis(f"Last Diagnosis: {severity.title()} ({confidence:.0%})")
     
     def on_diagnosis_error(self, error_message: str):
         """Handle diagnosis error"""
         self.progress_indicator.hide()
         self.diagnose_btn.configure(state="normal", text="Analyze ECG")
         self.diagnosis_status_label.configure(text=f"Diagnosis failed: {error_message}", text_color=ERROR_RED)
-        
-        # Show error in results
-        error_text = f"Diagnosis Error ({datetime.now().strftime('%H:%M:%S')}):\n{error_message}\n\n"
-        self.current_diagnosis_text.insert("1.0", error_text)
+
+        self.current_severity_badge.configure(text="Analysis Error", fg_color=ERROR_RED, text_color=TEXT_WHITE)
+        self.current_confidence_label.configure(text="Confidence --", text_color=TEXT_GRAY)
+        self.current_primary_label.configure(text="The AI diagnosis request failed.", text_color=TEXT_WHITE)
+        self.current_meta_label.configure(text=error_message, text_color=ERROR_RED)
+        self.set_textbox_content(self.findings_text, error_message)
+        self.set_textbox_content(self.actions_text, "Check API connectivity, confirm the ECG trace is live, and retry the analysis.")
+        self.set_textbox_content(self.follow_up_text, "If the error persists, validate the API key and review the serial data quality before another run.")
+        self.set_textbox_content(self.notes_text, f"Failure time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self.results_tabs.set("Current")
         
         self.show_error("Diagnosis Error", error_message)
     
@@ -907,10 +1083,23 @@ class ModernECGMainWindow:
         self.auto_diagnosis_enabled = not self.auto_diagnosis_enabled
         
         if self.auto_diagnosis_enabled:
-            self.auto_diagnosis_btn.configure(text="Auto: ON", style="success")
+            self.auto_diagnosis_btn.configure(
+                text="Auto: ON",
+                fg_color=BUTTON_SUCCESS["bg"],
+                hover_color=BUTTON_SUCCESS["hover_bg"],
+                text_color=BUTTON_SUCCESS["fg"],
+                border_width=0
+            )
             self.diagnosis_status_label.configure(text="Auto-diagnosis enabled (every 30s)", text_color=SUCCESS_GREEN)
         else:
-            self.auto_diagnosis_btn.configure(text="Auto: OFF", style="secondary") 
+            self.auto_diagnosis_btn.configure(
+                text="Auto: OFF",
+                fg_color=BUTTON_SECONDARY["bg"],
+                hover_color=BUTTON_SECONDARY["hover_bg"],
+                text_color=BUTTON_SECONDARY["fg"],
+                border_width=1,
+                border_color=BUTTON_SECONDARY["border"]
+            )
             self.diagnosis_status_label.configure(text="Auto-diagnosis disabled", text_color=TEXT_GRAY)
     
     def handle_serial_data(self, data: str):
@@ -921,6 +1110,7 @@ class ModernECGMainWindow:
     def process_data_queue(self):
         """Process queued serial data in main thread"""
         if not self.serial_handler.is_connected:
+            self.data_after_id = None
             return
         
         with self.data_lock:
@@ -932,7 +1122,9 @@ class ModernECGMainWindow:
         
         # Schedule next update
         if self.serial_handler.is_connected:
-            self.root.after(50, self.process_data_queue)
+            self.data_after_id = self.root.after(50, self.process_data_queue)
+        else:
+            self.data_after_id = None
     
     def process_ecg_data(self, data: str):
         """Process individual ECG data point with performance optimizations"""
@@ -960,9 +1152,9 @@ class ModernECGMainWindow:
                 # Add to optimized circular buffer instead of growing list
                 self.ecg_buffer.append([ecg_value])
                 
-                # Update plot with optimized plotter
-                recent_data = self.ecg_buffer.get_recent_data(250)  # Last 1 second
-                self.ecg_plot.update_data(recent_data.tolist())
+                # Update plot from the current rolling buffer snapshot.
+                recent_data = self.ecg_buffer.get_recent_data(self.ecg_plot.max_points)
+                self.ecg_plot.update_data(recent_data, sample_rate=250)
                 
                 # Record if enabled
                 if self.data_recorder and self.data_recorder.recording:
@@ -995,93 +1187,110 @@ class ModernECGMainWindow:
             self.start_diagnosis()
         
         # Schedule next check
-        self.root.after(1000, self.check_auto_diagnosis)
+        self.auto_diagnosis_after_id = self.root.after(1000, self.check_auto_diagnosis)
     
     def update_statistics(self):
         """Update real-time statistics display with performance monitoring"""
         # Get performance report
         perf_report = self.performance_monitor.get_performance_report()
-        
+
         if self.ecg_buffer.count > 0:
-            # Calculate heart rate using circular buffer (simplified)
-            if self.ecg_buffer.count > 500:  # At least 2 seconds of data
-                try:
-                    # Simple peak detection for heart rate using optimized buffer
-                    data = self.ecg_buffer.get_recent_data(1250)  # Last 5 seconds
-                    peaks = []
-                    threshold = np.mean(data) + 0.5 * np.std(data)
-                    
-                    for i in range(1, len(data) - 1):
-                        if data[i] > data[i-1] and data[i] > data[i+1] and data[i] > threshold:
-                            if not peaks or i - peaks[-1] >= 50:  # Minimum distance between peaks
-                                peaks.append(i)
-                    
-                    if len(peaks) > 1:
-                        intervals = np.diff(peaks) / 250.0  # Convert to seconds
-                        avg_interval = np.mean(intervals)
-                        heart_rate = 60.0 / avg_interval if avg_interval > 0 else 0
-                        self.hr_label.configure(text=f"{heart_rate:.0f} BPM", text_color=SUCCESS_GREEN)
-                    else:
-                        self.hr_label.configure(text="-- BPM", text_color=TEXT_GRAY)
-                        
-                except Exception as e:
-                    print(f"Error calculating heart rate: {e}")
-                    self.hr_label.configure(text="-- BPM", text_color=TEXT_GRAY)
-            
-            # Update signal quality using circular buffer
-            if self.ecg_buffer.count > 100:
-                recent_data = self.ecg_buffer.get_recent_data(100)
-                noise_level = np.std(recent_data)
-                
-                if noise_level < 10:
-                    quality = "Excellent"
-                    color = SUCCESS_GREEN
-                elif noise_level < 25:
-                    quality = "Good"  
-                    color = SUCCESS_GREEN
-                elif noise_level < 50:
-                    quality = "Fair"
-                    color = WARNING_YELLOW
-                else:
-                    quality = "Poor"
-                    color = ERROR_RED
-                
-                self.quality_label.configure(text=quality, text_color=color)
-            
-            # Update data count and buffer usage
-            self.count_label.configure(text=f"{self.ecg_buffer.count}")
+            metrics = self.ecg_plot.get_metrics()
+            if metrics.get("sample_count", 0) == 0:
+                recent_data = self.ecg_buffer.get_recent_data(self.ecg_plot.max_points)
+                self.ecg_plot.update_data(recent_data, sample_rate=250)
+                metrics = self.ecg_plot.get_metrics()
+
+            self.update_clinical_snapshot(metrics)
+
             buffer_usage = (self.ecg_buffer.count / self.ecg_buffer.max_size) * 100
-            
-            # Update performance metrics in footer if available
-            try:
-                performance_text = (f"CPU: {perf_report['cpu_percent']:.1f}% | "
-                                  f"RAM: {perf_report['memory_mb']}MB | "
-                                  f"FPS: {perf_report['frame_rate']:.1f} | "
-                                  f"Buffer: {buffer_usage:.1f}%")
-                self.update_footer_status(performance_text)
-            except Exception:
-                pass
+            self.update_footer_performance(
+                f"CPU {perf_report['cpu_percent']:.0f}% | RAM {perf_report['memory_mb']:.0f}MB | FPS {perf_report['frame_rate']:.1f} | Buffer {buffer_usage:.0f}%"
+            )
+        else:
+            self.update_clinical_snapshot()
+            self.update_footer_performance("")
         
         # Update ECG statistics tab
         self.update_ecg_statistics_display()
         
         # Schedule next update
-        self.root.after(1000, self.update_statistics)
+        self.stats_after_id = self.root.after(1000, self.update_statistics)
     
     def display_diagnosis(self, diagnosis: Dict[str, Any]):
         """Display diagnosis results"""
-        # Clear current results
-        self.current_diagnosis_text.delete("1.0", "end")
-        
-        # Format diagnosis text
-        diagnosis_text = self.format_diagnosis_text(diagnosis)
-        self.current_diagnosis_text.insert("1.0", diagnosis_text)
-        
-        # Color code based on severity
         severity = diagnosis.get('severity', 'unknown').lower()
-        if severity in SEVERITY_COLORS:
-            color = SEVERITY_COLORS[severity]
-            self.current_diagnosis_text.configure(text_color=color)
+        severity_color = SEVERITY_COLORS.get(severity, BG_LIGHT)
+        severity_text_color = BG_DARK if severity == 'moderate' else TEXT_WHITE
+
+        primary = diagnosis.get('primary_diagnosis', 'Unknown diagnosis')
+        confidence = diagnosis.get('confidence', 0.0)
+        timestamp = diagnosis.get('timestamp', datetime.now().isoformat())
+
+        self.current_severity_badge.configure(
+            text=f"{severity.upper()}" if severity != 'unknown' else "UNKNOWN",
+            fg_color=severity_color,
+            text_color=severity_text_color
+        )
+        self.current_confidence_label.configure(text=f"Confidence {confidence:.0%}", text_color=severity_color)
+        self.current_primary_label.configure(text=primary, text_color=TEXT_WHITE)
+        self.current_meta_label.configure(
+            text=f"Updated {timestamp[:19].replace('T', ' ')} | Model {diagnosis.get('model_used', 'AI analysis')}",
+            text_color=TEXT_GRAY
+        )
+
+        findings = diagnosis.get('key_findings', [])
+        self.set_textbox_content(
+            self.findings_text,
+            "\n".join([f"- {finding}" for finding in findings]) or "No key findings were returned by the model."
+        )
+
+        recommendations = diagnosis.get('recommendations', {})
+        immediate_actions = recommendations.get('immediate_actions', [])
+        follow_up = recommendations.get('follow_up', [])
+        lifestyle = recommendations.get('lifestyle', [])
+
+        self.set_textbox_content(
+            self.actions_text,
+            "\n".join([f"- {item}" for item in immediate_actions]) or "No immediate actions were provided."
+        )
+
+        follow_up_lines = [f"- {item}" for item in follow_up + lifestyle]
+        self.set_textbox_content(
+            self.follow_up_text,
+            "\n".join(follow_up_lines) or "No follow-up or lifestyle guidance was provided."
+        )
+
+        notes_lines = []
+        secondary = diagnosis.get('secondary_conditions', [])
+        if secondary:
+            notes_lines.append("Secondary considerations:")
+            notes_lines.extend([f"- {condition}" for condition in secondary])
+
+        normal_ranges = diagnosis.get('normal_ranges_comparison', {})
+        if normal_ranges:
+            notes_lines.append("")
+            notes_lines.append("Comparison with normal ranges:")
+            for label, value in normal_ranges.items():
+                notes_lines.append(f"- {label.replace('_', ' ').title()}: {value}")
+
+        risk_factors = diagnosis.get('risk_factors', [])
+        if risk_factors:
+            notes_lines.append("")
+            notes_lines.append("Risk factors:")
+            notes_lines.extend([f"- {factor}" for factor in risk_factors])
+
+        prognosis = diagnosis.get('prognosis')
+        if prognosis:
+            notes_lines.append("")
+            notes_lines.append(f"Prognosis: {prognosis}")
+
+        if diagnosis.get('parse_error'):
+            notes_lines.append("")
+            notes_lines.append(f"Parsing note: {diagnosis['parse_error']}")
+
+        self.set_textbox_content(self.notes_text, "\n".join(notes_lines) or "No additional clinical notes were provided.")
+        self.update_clinical_snapshot(self.ecg_plot.get_metrics())
         
         # Switch to current results tab
         self.results_tabs.set("Current")
@@ -1164,11 +1373,18 @@ class ModernECGMainWindow:
         
         # Get data from circular buffer
         data = self.ecg_buffer.get_recent_data(min(1000, self.ecg_buffer.count))
+        metrics = self.ecg_plot.get_metrics()
         
         stats_text = f"=== ECG STATISTICS ===\n"
         stats_text += f"Last Updated: {datetime.now().strftime('%H:%M:%S')}\n\n"
         stats_text += f"Sample Count: {self.ecg_buffer.count}\n"
         stats_text += f"Duration: {self.ecg_buffer.count / 250:.1f} seconds\n\n"
+        stats_text += f"Clinical Summary:\n"
+        stats_text += f"- Estimated HR: {self.hr_label.cget('text')}\n"
+        stats_text += f"- Rhythm: {metrics.get('rhythm_label', 'Awaiting data')}\n"
+        stats_text += f"- Signal Quality: {metrics.get('signal_quality_label', 'Awaiting data')}\n"
+        stats_text += f"- Displayed Window: {metrics.get('duration_sec', 0.0):.1f} seconds\n"
+        stats_text += f"- Peak-to-Peak: {metrics.get('peak_to_peak', 0.0):.2f}\n\n"
         stats_text += f"Voltage Statistics:\n"
         stats_text += f"• Mean: {np.mean(data):.2f} μV\n"
         stats_text += f"• Std Dev: {np.std(data):.2f} μV\n"
@@ -1181,10 +1397,30 @@ class ModernECGMainWindow:
     
     def update_footer_status(self, status: str):
         """Update footer status text"""
-        hr_text = self.hr_label.cget("text")
-        last_diagnosis = "Never" if not self.diagnosis_history else "Recent"
-        
-        full_status = f"Status: {status} | Heart Rate: {hr_text} | Last Diagnosis: {last_diagnosis}"
+        self.footer_acquisition_text = status
+        self.render_footer_status()
+
+    def update_footer_diagnosis(self, status: str):
+        """Update footer diagnosis summary text."""
+        self.footer_diagnosis_text = status
+        self.render_footer_status()
+
+    def update_footer_performance(self, status: str):
+        """Update footer performance summary without overwriting acquisition state."""
+        self.footer_performance_text = status
+        self.render_footer_status()
+
+    def render_footer_status(self):
+        """Render the full footer string from its individual state segments."""
+        hr_text = self.hr_label.cget("text") if hasattr(self, 'hr_label') else "-- BPM"
+        parts = [
+            f"Acquisition: {self.footer_acquisition_text}",
+            f"Heart Rate: {hr_text}",
+            self.footer_diagnosis_text,
+        ]
+        if self.footer_performance_text:
+            parts.append(self.footer_performance_text)
+        full_status = " | ".join(parts)
         self.footer_status.configure(text=full_status)
     
     # Utility methods for dialogs
@@ -1229,11 +1465,6 @@ Features:
 For more help, see README.md
         """
         messagebox.showinfo("Help", help_text)
-    def on_closing(self): 
-        """Handle application closing"""
-        if self.serial_handler and self.serial_handler.is_connected:
-            self.serial_handler.disconnect()
-        self.root.destroy()
 
 def main():
     """Main entry point for modern ECG GUI"""

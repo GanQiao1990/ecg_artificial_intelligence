@@ -8,6 +8,11 @@ python-dotenv>=1.0.0
 # Dependencies for the Kivy GUI
 kivy>=2.3.0
 
+# Dependencies for the modern Tkinter diagnosis GUI
+customtkinter>=5.2.2
+matplotlib>=3.7.0
+Pillow>=10.0.0
+
 # Performance monitoring dependency
 psutil>=5.9.0
 
@@ -23,6 +28,5 @@ idna==2.10
 # pytest>=7.0.0
 # pytest-qt>=4.2.0
 
-# Note: Legacy Tkinter GUI dependencies (customtkinter, matplotlib, Pillow)
-# have been replaced with Kivy for better cross-platform compatibility.
-# The Kivy GUI is now the recommended default interface.
+# Kivy remains the recommended default for the broadest cross-platform setup,
+# but the modern Tkinter GUI is available for diagnosis-focused desktop review.
