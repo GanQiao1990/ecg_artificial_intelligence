@@ -50,7 +50,7 @@ class ModernCard(ctk.CTkFrame):
                 self,
                 fg_color=BG_LIGHT,
                 height=40,
-                corner_radius=(LAYOUT["radius_lg"], LAYOUT["radius_lg"], 0, 0)
+                corner_radius=LAYOUT["radius_lg"]
             )
             self.title_frame.pack(fill="x", padx=0, pady=(0, 1))
             self.title_frame.pack_propagate(False)
