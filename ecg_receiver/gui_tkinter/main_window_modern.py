@@ -25,16 +25,12 @@ from ..core.data_recorder import DataRecorder
 from ..core.circular_buffer import CircularECGBuffer
 from ..core.performance_monitor import PerformanceMonitor
 
-# Import diagnosis client with fallback
+# Import diagnosis client
 try:
-    from ecg_diagnosis import GeminiECGDiagnosisClient
+    from ...diagnosis import GeminiECGDiagnosisClient
 except ImportError:
-    # Fallback for different import contexts
     try:
-        import sys
-        import os
-        sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-        from ecg_diagnosis import GeminiECGDiagnosisClient
+        from ecg_receiver.diagnosis import GeminiECGDiagnosisClient
     except ImportError:
         print("Warning: ECG diagnosis module not found")
         GeminiECGDiagnosisClient = None
