@@ -20,7 +20,6 @@ Source code: [GitHub repository](https://github.com/GanQiao1990/ecg_receiver_sta
 If you are new to the project, start with the modern Tkinter diagnosis GUI.
 
 - Modern Tkinter diagnosis GUI: best for doctor-facing review and the clearest ECG summary.
-- Kivy GUI: good if you want the broadest cross-platform setup.
 - Legacy PyQt GUI: kept for compatibility, but not recommended for new users.
 
 ## Quick Start
@@ -52,16 +51,21 @@ Modern diagnosis GUI:
 python launch_modern_gui.py
 ```
 
-Kivy GUI:
-
-```bash
-python launch_kivy_gui.py
-```
-
 Legacy PyQt GUI:
 
 ```bash
 python -m ecg_receiver.main
+```
+
+Important:
+
+- Run commands from the repository root where `launch_modern_gui.py` is located.
+- If your default `python` points to a different environment (for example `D:\MGLTOOL\python.exe`), run with your intended Python executable explicitly.
+
+Windows example:
+
+```powershell
+& "D:\Users\dell\anaconda3\python.exe" launch_modern_gui.py
 ```
 
 ## First-Time User Workflow
@@ -164,25 +168,39 @@ Use Start Recording to save incoming ECG data to a CSV file. This is useful when
 
 - Reinstall dependencies with `pip install -r requirements.txt`.
 - If Tkinter support is missing on your Linux system, install your distribution’s Tk packages.
-- Use `python launch_kivy_gui.py` if you want the Kivy interface instead.
+- Confirm you are in the project root before launching.
+- Confirm `python` points to a Python 3 environment with the project dependencies installed.
+
+### Error: can't open file 'launch_kivy_gui.py'
+
+This repository currently does not include `launch_kivy_gui.py`. Use:
+
+```bash
+python launch_modern_gui.py
+```
+
+Or provide an explicit Python path on Windows:
+
+```powershell
+& "D:\Users\dell\anaconda3\python.exe" launch_modern_gui.py
+```
 
 ## Testing
 
 Useful commands for checking the project:
 
 ```bash
-python test_connection.py
-python test_diagnosis.py
-python validate_installation.py
+python -m py_compile launch_modern_gui.py
+python -m py_compile ecg_receiver/gui_tkinter/main_window_modern.py
+python -m py_compile ecg_receiver/gui_tkinter/components/optimized_plotter.py
+python -m py_compile ecg_receiver/core/llm_diagnosis.py
 ```
 
 ## Project Layout
 
 - `launch_modern_gui.py`: modern doctor-facing Tkinter GUI launcher.
-- `launch_kivy_gui.py`: Kivy GUI launcher.
 - `ecg_receiver/core`: serial handling, buffers, recording, and performance monitoring.
 - `ecg_receiver/gui_tkinter`: modern diagnosis-focused desktop interface.
-- `ecg_receiver/gui_kivy`: lightweight Kivy interface.
 - `ecg_receiver/gui`: legacy PyQt interface.
 
 ## Safety Note
