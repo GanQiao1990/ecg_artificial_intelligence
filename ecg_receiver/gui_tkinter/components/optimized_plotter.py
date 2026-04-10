@@ -130,15 +130,33 @@ class OptimizedECGPlotter:
         self.ax.grid(which="minor", axis="y", color=self.paper_minor, linewidth=0.45, alpha=0.85)
 
     def _detect_peaks(self, data: np.ndarray) -> List[int]:
-        if data.size < max(3, int(self.sample_rate)):
+        """Improved R-peak detection with adaptive threshold and refractory period."""
+        if data.size < max(10, int(self.sample_rate * 0.8)):
             return []
 
-        threshold = float(np.mean(data) + 0.6 * np.std(data))
-        min_distance = max(1, int(self.sample_rate * 0.25))
+        # High-pass baseline removal: subtract a wide rolling median
+        win = max(1, int(self.sample_rate * 0.6))
+        if win % 2 == 0:
+            win += 1
+        # Use a simple rolling mean as a proxy (cheaper than median)
+        kernel = np.ones(win) / win
+        baseline = np.convolve(data, kernel, mode="same")
+        filtered = data - baseline
+
+        # Adaptive threshold: mean + 0.5 * std of the positive portion
+        pos = filtered[filtered > 0]
+        if pos.size == 0:
+            return []
+        threshold = float(np.mean(pos) + 0.5 * np.std(pos))
+
+        # Physiological refractory period: ≥ 0.3 s (200 BPM ceiling)
+        min_distance = max(1, int(self.sample_rate * 0.3))
         peaks: List[int] = []
 
-        for idx in range(1, data.size - 1):
-            if data[idx] >= threshold and data[idx] >= data[idx - 1] and data[idx] > data[idx + 1]:
+        for idx in range(1, filtered.size - 1):
+            if (filtered[idx] >= threshold
+                    and filtered[idx] >= filtered[idx - 1]
+                    and filtered[idx] > filtered[idx + 1]):
                 if not peaks or idx - peaks[-1] >= min_distance:
                     peaks.append(idx)
 
@@ -157,25 +175,42 @@ class OptimizedECGPlotter:
         rhythm_label = "Insufficient data"
         rhythm_color = TEXT_GRAY
 
-        if len(peaks) > 1:
+        if len(peaks) >= 3:
             rr_intervals = np.diff(peaks) / self.sample_rate
-            avg_rr = float(np.mean(rr_intervals)) if rr_intervals.size else 0.0
-            if avg_rr > 0:
-                heart_rate = 60.0 / avg_rr
-                rr_variability = float(np.std(rr_intervals) / avg_rr) if rr_intervals.size > 1 else 0.0
 
-            if rr_variability is None:
-                rhythm_label = "Undetermined"
-                rhythm_color = TEXT_GRAY
-            elif rr_variability < 0.08:
-                rhythm_label = "Regular"
-                rhythm_color = SUCCESS_GREEN
-            elif rr_variability < 0.16:
-                rhythm_label = "Mild irregularity"
-                rhythm_color = WARNING_YELLOW
-            else:
-                rhythm_label = "Irregular"
-                rhythm_color = ERROR_RED
+            # Reject physiologically implausible RR intervals (< 0.3 s or > 2.0 s)
+            valid_rr = rr_intervals[(rr_intervals >= 0.3) & (rr_intervals <= 2.0)]
+            if valid_rr.size >= 2:
+                # Use median for robustness against outliers
+                median_rr = float(np.median(valid_rr))
+                if median_rr > 0:
+                    heart_rate = 60.0 / median_rr
+                    # Clamp to physiological range 30-220 BPM
+                    heart_rate = max(30.0, min(220.0, heart_rate))
+                    rr_variability = float(np.std(valid_rr) / np.mean(valid_rr))
+            elif valid_rr.size == 1:
+                median_rr = float(valid_rr[0])
+                if median_rr > 0:
+                    heart_rate = max(30.0, min(220.0, 60.0 / median_rr))
+                    rr_variability = 0.0
+        elif len(peaks) == 2:
+            rr = float(np.diff(peaks)[0]) / self.sample_rate
+            if 0.3 <= rr <= 2.0:
+                heart_rate = max(30.0, min(220.0, 60.0 / rr))
+                rr_variability = 0.0
+
+        if rr_variability is None:
+            rhythm_label = "Undetermined"
+            rhythm_color = TEXT_GRAY
+        elif rr_variability < 0.08:
+            rhythm_label = "Regular"
+            rhythm_color = SUCCESS_GREEN
+        elif rr_variability < 0.16:
+            rhythm_label = "Mild irregularity"
+            rhythm_color = WARNING_YELLOW
+        else:
+            rhythm_label = "Irregular"
+            rhythm_color = ERROR_RED
 
         drift_window = max(1, data.size // 5)
         baseline_drift = abs(float(np.median(data[:drift_window]) - np.median(data[-drift_window:]))) if data.size else 0.0

@@ -5,9 +5,11 @@ Redesigned with CustomTkinter and modern UI principles
 
 import customtkinter as ctk
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, ttk, filedialog
 import threading
 import time
+import json
+import csv
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 import sys
@@ -24,16 +26,7 @@ from ..core.serial_handler import SerialHandler
 from ..core.data_recorder import DataRecorder
 from ..core.circular_buffer import CircularECGBuffer
 from ..core.performance_monitor import PerformanceMonitor
-
-# Import diagnosis client
-try:
-    from ...diagnosis import GeminiECGDiagnosisClient
-except ImportError:
-    try:
-        from ecg_receiver.diagnosis import GeminiECGDiagnosisClient
-    except ImportError:
-        print("Warning: ECG diagnosis module not found")
-        GeminiECGDiagnosisClient = None
+from ..core.llm_diagnosis import LLMDiagnosisClient, MODEL_PRESETS
 
 class DiagnosisWorker:
     """Worker for ECG diagnosis to prevent UI blocking"""
@@ -60,6 +53,177 @@ class DiagnosisWorker:
         self.thread = threading.Thread(target=run_diagnosis, daemon=True)
         self.thread.start()
 
+
+class SettingsDialog(ctk.CTkToplevel):
+    """Full settings dialog with serial, display, diagnosis, and data tabs."""
+
+    def __init__(self, parent_app, **kwargs):
+        super().__init__(**kwargs)
+        self.app = parent_app
+        self.title("Settings")
+        self.geometry("560x520")
+        self.resizable(False, False)
+        self.configure(fg_color=BG_DARK)
+        self.transient(parent_app.root)
+        self.grab_set()
+
+        self._build_ui()
+        self._load_current_settings()
+
+    def _build_ui(self):
+        tabs = ctk.CTkTabview(self, fg_color=BG_CARD)
+        tabs.pack(fill="both", expand=True, padx=14, pady=(14, 6))
+
+        # ── Serial tab ───────────────────────────────────────────────
+        tabs.add("Serial")
+        serial = tabs.tab("Serial")
+
+        ctk.CTkLabel(serial, text="Baud Rate:", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.baud_combo = ctk.CTkComboBox(serial, values=["9600", "19200", "38400", "57600", "115200", "230400"], fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.baud_combo.pack(fill="x", padx=10, pady=4)
+
+        ctk.CTkLabel(serial, text="Data Bits:", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.databits_combo = ctk.CTkComboBox(serial, values=["7", "8"], fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.databits_combo.pack(fill="x", padx=10, pady=4)
+
+        ctk.CTkLabel(serial, text="Parity:", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.parity_combo = ctk.CTkComboBox(serial, values=["None", "Even", "Odd"], fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.parity_combo.pack(fill="x", padx=10, pady=4)
+
+        ctk.CTkLabel(serial, text="Stop Bits:", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.stopbits_combo = ctk.CTkComboBox(serial, values=["1", "1.5", "2"], fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.stopbits_combo.pack(fill="x", padx=10, pady=4)
+
+        # ── Display tab ──────────────────────────────────────────────
+        tabs.add("Display")
+        display = tabs.tab("Display")
+
+        ctk.CTkLabel(display, text="ECG Time Window (seconds):", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.time_window_entry = ctk.CTkEntry(display, fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.time_window_entry.pack(fill="x", padx=10, pady=4)
+
+        ctk.CTkLabel(display, text="Sample Rate (Hz):", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.sample_rate_entry = ctk.CTkEntry(display, fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.sample_rate_entry.pack(fill="x", padx=10, pady=4)
+
+        ctk.CTkLabel(display, text="Plot Update Interval (ms):", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.update_interval_entry = ctk.CTkEntry(display, fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.update_interval_entry.pack(fill="x", padx=10, pady=4)
+
+        ctk.CTkLabel(display, text="Appearance Mode:", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.appearance_combo = ctk.CTkComboBox(display, values=["Dark", "Light", "System"], fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.appearance_combo.pack(fill="x", padx=10, pady=4)
+
+        # ── Diagnosis tab ────────────────────────────────────────────
+        tabs.add("Diagnosis")
+        diag = tabs.tab("Diagnosis")
+
+        ctk.CTkLabel(diag, text="Auto-Diagnosis Interval (seconds):", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.auto_interval_entry = ctk.CTkEntry(diag, fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.auto_interval_entry.pack(fill="x", padx=10, pady=4)
+
+        ctk.CTkLabel(diag, text="Diagnosis Buffer Size (samples):", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.diag_buffer_entry = ctk.CTkEntry(diag, fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.diag_buffer_entry.pack(fill="x", padx=10, pady=4)
+
+        ctk.CTkLabel(diag, text="LLM Request Timeout (seconds):", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.timeout_entry = ctk.CTkEntry(diag, fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.timeout_entry.pack(fill="x", padx=10, pady=4)
+
+        ctk.CTkLabel(diag, text="Max Diagnosis History:", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.max_history_entry = ctk.CTkEntry(diag, fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.max_history_entry.pack(fill="x", padx=10, pady=4)
+
+        # ── Data tab ─────────────────────────────────────────────────
+        tabs.add("Data")
+        data = tabs.tab("Data")
+
+        ctk.CTkLabel(data, text="Recording Directory:", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        rec_row = ctk.CTkFrame(data, fg_color="transparent")
+        rec_row.pack(fill="x", padx=10, pady=4)
+        self.rec_dir_entry = ctk.CTkEntry(rec_row, fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.rec_dir_entry.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(rec_row, text="Browse", width=70, command=self._browse_rec_dir, fg_color=SECONDARY_BLUE).pack(side="right", padx=(6, 0))
+
+        ctk.CTkLabel(data, text="Export Default Format:", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.export_fmt_combo = ctk.CTkComboBox(data, values=["JSON", "CSV", "TXT"], fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.export_fmt_combo.pack(fill="x", padx=10, pady=4)
+
+        # ── Buttons bar ──────────────────────────────────────────────
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=14, pady=(6, 14))
+        ctk.CTkButton(btn_frame, text="Save", fg_color=SUCCESS_GREEN, hover_color="#059669", command=self._save).pack(side="right", padx=(6, 0))
+        ctk.CTkButton(btn_frame, text="Cancel", fg_color=BG_LIGHT, hover_color=BG_HOVER, command=self.destroy).pack(side="right")
+
+    # ── populate from current app state ──────────────────────────────
+    def _load_current_settings(self):
+        self.baud_combo.set(str(getattr(self.app, '_baud_rate', 57600)))
+        self.databits_combo.set(str(getattr(self.app, '_data_bits', 8)))
+        self.parity_combo.set(getattr(self.app, '_parity', 'None'))
+        self.stopbits_combo.set(str(getattr(self.app, '_stop_bits', 1)))
+
+        self.time_window_entry.insert(0, str(getattr(self.app.ecg_plot, 'time_window_sec', 10)))
+        self.sample_rate_entry.insert(0, str(int(getattr(self.app.ecg_plot, 'sample_rate', 250))))
+        self.update_interval_entry.insert(0, str(getattr(self.app.ecg_plot, 'update_interval', 50)))
+        self.appearance_combo.set(ctk.get_appearance_mode())
+
+        self.auto_interval_entry.insert(0, str(self.app.auto_diagnosis_interval))
+        self.diag_buffer_entry.insert(0, str(self.app.diagnosis_buffer_size))
+        self.timeout_entry.insert(0, str(getattr(self.app, '_llm_timeout', 60)))
+        self.max_history_entry.insert(0, str(self.app.max_history_size))
+
+        self.rec_dir_entry.insert(0, self.app.data_recorder.base_dir)
+        self.export_fmt_combo.set(getattr(self.app, '_export_format', 'JSON'))
+
+    def _browse_rec_dir(self):
+        d = filedialog.askdirectory()
+        if d:
+            self.rec_dir_entry.delete(0, "end")
+            self.rec_dir_entry.insert(0, d)
+
+    def _save(self):
+        try:
+            self.app._baud_rate = int(self.baud_combo.get())
+            self.app._data_bits = int(self.databits_combo.get())
+            self.app._parity = self.parity_combo.get()
+            self.app._stop_bits = float(self.stopbits_combo.get())
+
+            tw = float(self.time_window_entry.get())
+            if 1 <= tw <= 60:
+                self.app.ecg_plot.time_window_sec = tw
+            sr = int(self.sample_rate_entry.get())
+            if 50 <= sr <= 2000:
+                self.app.ecg_plot.sample_rate = float(sr)
+            ui = int(self.update_interval_entry.get())
+            if 10 <= ui <= 1000:
+                self.app.ecg_plot.update_interval = ui
+
+            mode = self.appearance_combo.get()
+            ctk.set_appearance_mode(mode.lower())
+
+            ai = int(self.auto_interval_entry.get())
+            if 5 <= ai <= 600:
+                self.app.auto_diagnosis_interval = ai
+            db = int(self.diag_buffer_entry.get())
+            if 500 <= db <= 50000:
+                self.app.diagnosis_buffer_size = db
+            to = int(self.timeout_entry.get())
+            if 5 <= to <= 300:
+                self.app._llm_timeout = to
+            mh = int(self.max_history_entry.get())
+            if 5 <= mh <= 500:
+                self.app.max_history_size = mh
+
+            rec_dir = self.rec_dir_entry.get().strip()
+            if rec_dir and os.path.isdir(rec_dir):
+                self.app.data_recorder.base_dir = rec_dir
+
+            self.app._export_format = self.export_fmt_combo.get()
+
+            self.destroy()
+        except Exception as exc:
+            messagebox.showerror("Settings Error", str(exc))
+
 class ModernECGMainWindow:
     """Modern ECG AI Diagnosis Main Window"""
     
@@ -72,7 +236,7 @@ class ModernECGMainWindow:
         # Initialize core components
         self.serial_handler = SerialHandler()
         self.data_recorder = DataRecorder()
-        self.diagnosis_client: Optional[GeminiECGDiagnosisClient] = None
+        self.diagnosis_client: Optional[LLMDiagnosisClient] = None
         self.diagnosis_worker: Optional[DiagnosisWorker] = None
         
         # Data management with performance optimizations
@@ -88,6 +252,15 @@ class ModernECGMainWindow:
         self.auto_diagnosis_enabled = False
         self.auto_diagnosis_interval = 30  # seconds
         self.last_auto_diagnosis = 0
+        
+        # Settings state
+        self._baud_rate = 57600
+        self._data_bits = 8
+        self._parity = 'None'
+        self._stop_bits = 1
+        self._llm_timeout = 60
+        self._export_format = 'JSON'
+        self._selected_model_preset = list(MODEL_PRESETS.keys())[0]
         
         # Performance monitoring
         self.performance_monitor = PerformanceMonitor()
@@ -368,11 +541,28 @@ class ModernECGMainWindow:
         self.create_results_display(diagnosis_content)
     
     def create_api_config(self, parent):
-        """Create API configuration section"""
-        api_card = ModernCard(parent, title="API Configuration")
+        """Create API configuration section with model selection"""
+        api_card = ModernCard(parent, title="LLM Model & API")
         api_card.pack(fill="x", pady=(0, 10))
         
         api_content = api_card.get_content_frame()
+        
+        # Model preset selector
+        model_frame = ctk.CTkFrame(api_content, fg_color="transparent")
+        model_frame.pack(fill="x", pady=(0, 10))
+        
+        ctk.CTkLabel(model_frame, text="Model:", text_color=TEXT_WHITE).pack(anchor="w")
+        self.model_combo = ctk.CTkComboBox(
+            model_frame,
+            values=list(MODEL_PRESETS.keys()),
+            fg_color=BG_LIGHT,
+            button_color=SECONDARY_BLUE,
+            button_hover_color=PRIMARY_BLUE,
+            text_color=TEXT_WHITE,
+            command=self._on_model_preset_changed,
+        )
+        self.model_combo.pack(fill="x", pady=(5, 0))
+        self.model_combo.set(self._selected_model_preset)
         
         # API Key input
         key_frame = ctk.CTkFrame(api_content, fg_color="transparent")
@@ -381,7 +571,7 @@ class ModernECGMainWindow:
         ctk.CTkLabel(key_frame, text="API Key:", text_color=TEXT_WHITE).pack(anchor="w")
         self.api_key_entry = ctk.CTkEntry(
             key_frame,
-            placeholder_text="Enter your Gemini API key",
+            placeholder_text="Enter your API key",
             show="*",
             fg_color=BG_LIGHT,
             border_color=TEXT_GRAY,
@@ -401,7 +591,23 @@ class ModernECGMainWindow:
             text_color=TEXT_WHITE
         )
         self.api_url_entry.pack(fill="x", pady=(5, 0))
-        self.api_url_entry.insert(0, "https://api.gptnb.ai/")
+
+        # Model ID input (for custom)
+        model_id_frame = ctk.CTkFrame(api_content, fg_color="transparent")
+        model_id_frame.pack(fill="x", pady=(0, 10))
+
+        ctk.CTkLabel(model_id_frame, text="Model ID:", text_color=TEXT_WHITE).pack(anchor="w")
+        self.model_id_entry = ctk.CTkEntry(
+            model_id_frame,
+            fg_color=BG_LIGHT,
+            border_color=TEXT_GRAY,
+            text_color=TEXT_WHITE,
+            placeholder_text="e.g. gpt-4o, gemini-pro"
+        )
+        self.model_id_entry.pack(fill="x", pady=(5, 0))
+
+        # Populate from default preset
+        self._on_model_preset_changed(self._selected_model_preset)
         
         # Setup button and status
         setup_frame = ctk.CTkFrame(api_content, fg_color="transparent")
@@ -483,7 +689,7 @@ class ModernECGMainWindow:
         # Progress indicator
         self.progress_indicator = ProgressIndicator(control_content)
         
-        # Control buttons
+        # Control buttons row 1
         button_frame = ctk.CTkFrame(control_content, fg_color="transparent")
         button_frame.pack(fill="x", pady=(0, 10))
         
@@ -504,6 +710,27 @@ class ModernECGMainWindow:
             command=self.toggle_auto_diagnosis
         )
         self.auto_diagnosis_btn.pack(side="right", padx=(10, 0))
+
+        # Control buttons row 2 - Export
+        export_frame = ctk.CTkFrame(control_content, fg_color="transparent")
+        export_frame.pack(fill="x", pady=(0, 10))
+
+        self.export_btn = ModernButton(
+            export_frame,
+            text="Export Report",
+            style="secondary",
+            icon="download",
+            command=self.export_diagnosis_report,
+        )
+        self.export_btn.pack(side="left", fill="x", expand=True)
+
+        self.export_all_btn = ModernButton(
+            export_frame,
+            text="Export All History",
+            style="secondary",
+            command=self.export_all_history,
+        )
+        self.export_all_btn.pack(side="right", padx=(10, 0))
         
         # Status label
         self.diagnosis_status_label = ctk.CTkLabel(
@@ -922,12 +1149,19 @@ class ModernECGMainWindow:
             self.show_error("Recording Error", f"Failed to stop recording: {str(e)}")
     
     def setup_diagnosis_api(self):
-        """Setup the AI diagnosis API client"""
+        """Setup the AI diagnosis API client using selected model"""
         api_key = self.api_key_entry.get().strip()
         api_url = self.api_url_entry.get().strip()
+        model_id = self.model_id_entry.get().strip()
         
         if not api_key:
             self.show_warning("API Setup", "Please enter an API key.")
+            return
+        if not api_url:
+            self.show_warning("API Setup", "Please enter an API URL.")
+            return
+        if not model_id:
+            self.show_warning("API Setup", "Please enter a Model ID.")
             return
         
         self.setup_api_btn.configure(text="Setting up...", state="disabled")
@@ -935,11 +1169,13 @@ class ModernECGMainWindow:
         
         def setup_thread():
             try:
-                if GeminiECGDiagnosisClient:
-                    self.diagnosis_client = GeminiECGDiagnosisClient(api_key, api_url)
-                    self.root.after(0, self.on_api_setup_success)
-                else:
-                    self.root.after(0, self.on_api_setup_error, "Diagnosis module not available")
+                self.diagnosis_client = LLMDiagnosisClient(
+                    api_key=api_key,
+                    api_url=api_url,
+                    model_id=model_id,
+                    timeout=self._llm_timeout,
+                )
+                self.root.after(0, self.on_api_setup_success)
             except Exception as e:
                 self.root.after(0, self.on_api_setup_error, str(e))
         
@@ -1437,8 +1673,126 @@ class ModernECGMainWindow:
         messagebox.showinfo(title, message)
     
     def open_settings(self):
-        """Open settings dialog"""
-        self.show_info("Settings", "Settings dialog coming soon!")
+        """Open full settings dialog"""
+        SettingsDialog(self)
+
+    def _on_model_preset_changed(self, preset_name: str):
+        """Populate API URL and Model ID from the selected preset."""
+        self._selected_model_preset = preset_name
+        preset = MODEL_PRESETS.get(preset_name, {})
+        url = preset.get("api_url", "")
+        mid = preset.get("model_id", "")
+
+        self.api_url_entry.delete(0, "end")
+        if url:
+            self.api_url_entry.insert(0, url)
+
+        self.model_id_entry.delete(0, "end")
+        if mid:
+            self.model_id_entry.insert(0, mid)
+
+    def export_diagnosis_report(self):
+        """Export the latest diagnosis report to file."""
+        if not self.last_diagnosis:
+            self.show_warning("Export", "No diagnosis available to export.")
+            return
+
+        fmt = getattr(self, '_export_format', 'JSON')
+        ext_map = {"JSON": ".json", "CSV": ".csv", "TXT": ".txt"}
+        default_ext = ext_map.get(fmt, ".json")
+
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=default_ext,
+            filetypes=[
+                ("JSON files", "*.json"),
+                ("CSV files", "*.csv"),
+                ("Text files", "*.txt"),
+                ("All files", "*.*"),
+            ],
+            initialfile=f"ecg_diagnosis_{datetime.now().strftime('%Y%m%d_%H%M%S')}{default_ext}",
+        )
+        if not filepath:
+            return
+
+        try:
+            if filepath.endswith(".json"):
+                with open(filepath, "w", encoding="utf-8") as f:
+                    json.dump(self.last_diagnosis, f, indent=2, ensure_ascii=False, default=str)
+            elif filepath.endswith(".csv"):
+                self._export_diagnosis_csv(filepath, [self.last_diagnosis])
+            else:
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(self.format_diagnosis_text(self.last_diagnosis))
+            self.show_success("Export", f"Report saved to:\n{filepath}")
+        except Exception as exc:
+            self.show_error("Export Error", str(exc))
+
+    def export_all_history(self):
+        """Export all diagnosis history to a file."""
+        if not self.diagnosis_history:
+            self.show_warning("Export", "No diagnosis history to export.")
+            return
+
+        fmt = getattr(self, '_export_format', 'JSON')
+        ext_map = {"JSON": ".json", "CSV": ".csv", "TXT": ".txt"}
+        default_ext = ext_map.get(fmt, ".json")
+
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=default_ext,
+            filetypes=[
+                ("JSON files", "*.json"),
+                ("CSV files", "*.csv"),
+                ("Text files", "*.txt"),
+                ("All files", "*.*"),
+            ],
+            initialfile=f"ecg_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}{default_ext}",
+        )
+        if not filepath:
+            return
+
+        try:
+            if filepath.endswith(".json"):
+                with open(filepath, "w", encoding="utf-8") as f:
+                    json.dump(self.diagnosis_history, f, indent=2, ensure_ascii=False, default=str)
+            elif filepath.endswith(".csv"):
+                all_diags = [e["diagnosis"] for e in self.diagnosis_history]
+                self._export_diagnosis_csv(filepath, all_diags)
+            else:
+                with open(filepath, "w", encoding="utf-8") as f:
+                    for entry in self.diagnosis_history:
+                        f.write(self.format_diagnosis_text(entry["diagnosis"]))
+                        f.write("\n" + "=" * 60 + "\n\n")
+            self.show_success("Export", f"History ({len(self.diagnosis_history)} records) saved to:\n{filepath}")
+        except Exception as exc:
+            self.show_error("Export Error", str(exc))
+
+    @staticmethod
+    def _export_diagnosis_csv(filepath: str, diagnoses: List[Dict[str, Any]]):
+        """Write a list of diagnosis dicts to CSV."""
+        fieldnames = [
+            "timestamp", "severity", "confidence", "primary_diagnosis",
+            "key_findings", "immediate_actions", "follow_up", "lifestyle",
+            "secondary_conditions", "risk_factors", "prognosis",
+        ]
+        with open(filepath, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            for d in diagnoses:
+                rec = d.get("recommendations", {})
+                row = {
+                    "timestamp": d.get("timestamp", ""),
+                    "severity": d.get("severity", ""),
+                    "confidence": d.get("confidence", ""),
+                    "primary_diagnosis": d.get("primary_diagnosis", ""),
+                    "key_findings": "; ".join(d.get("key_findings", [])),
+                    "immediate_actions": "; ".join(rec.get("immediate_actions", [])),
+                    "follow_up": "; ".join(rec.get("follow_up", [])),
+                    "lifestyle": "; ".join(rec.get("lifestyle", [])),
+                    "secondary_conditions": "; ".join(d.get("secondary_conditions", [])),
+                    "risk_factors": "; ".join(d.get("risk_factors", [])),
+                    "prognosis": d.get("prognosis", ""),
+                }
+                writer.writerow(row)
     
     def show_help(self):
         """Show help dialog"""
