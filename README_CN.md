@@ -20,7 +20,6 @@
 如果你是新用户，建议优先使用现代 Tkinter 诊断界面。
 
 - 现代 Tkinter 诊断界面：最适合医生查看实时波形和诊断摘要。
-- Kivy 界面：适合希望获得更广泛跨平台兼容性的用户。
 - 传统 PyQt 界面：保留兼容性用途，不建议新用户优先使用。
 
 ## 快速开始
@@ -52,16 +51,21 @@ pip install -r requirements.txt
 python launch_modern_gui.py
 ```
 
-Kivy 界面：
-
-```bash
-python launch_kivy_gui.py
-```
-
 传统 PyQt 界面：
 
 ```bash
 python -m ecg_receiver.main
+```
+
+重要说明：
+
+- 请在仓库根目录执行命令（即包含 `launch_modern_gui.py` 的目录）。
+- 如果你的默认 `python` 指向了其他环境（例如 `D:\MGLTOOL\python.exe`），请显式使用你期望的 Python 可执行文件。
+
+Windows 示例：
+
+```powershell
+& "D:\Users\dell\anaconda3\python.exe" launch_modern_gui.py
 ```
 
 ## 新用户操作流程
@@ -164,25 +168,39 @@ DATA,1234567890,1024,512,75,OK
 
 - 重新安装依赖：`pip install -r requirements.txt`
 - 如果 Linux 系统缺少 Tk 支持，请安装发行版对应的 Tk 软件包。
-- 如果你只想先看界面，可以改用 `python launch_kivy_gui.py`。
+- 确认你当前目录是项目根目录。
+- 确认 `python` 指向安装了项目依赖的 Python 3 环境。
+
+### 错误：can't open file 'launch_kivy_gui.py'
+
+当前仓库不包含 `launch_kivy_gui.py`，请使用：
+
+```bash
+python launch_modern_gui.py
+```
+
+Windows 可使用显式 Python 路径：
+
+```powershell
+& "D:\Users\dell\anaconda3\python.exe" launch_modern_gui.py
+```
 
 ## 测试命令
 
 下面这些命令可以帮助你检查项目是否正常：
 
 ```bash
-python test_connection.py
-python test_diagnosis.py
-python validate_installation.py
+python -m py_compile launch_modern_gui.py
+python -m py_compile ecg_receiver/gui_tkinter/main_window_modern.py
+python -m py_compile ecg_receiver/gui_tkinter/components/optimized_plotter.py
+python -m py_compile ecg_receiver/core/llm_diagnosis.py
 ```
 
 ## 项目结构
 
 - `launch_modern_gui.py`：现代医生查看型 Tkinter 启动器。
-- `launch_kivy_gui.py`：Kivy 启动器。
 - `ecg_receiver/core`：串口处理、缓冲区、录制和性能监控。
 - `ecg_receiver/gui_tkinter`：面向诊断的现代桌面界面。
-- `ecg_receiver/gui_kivy`：轻量级 Kivy 界面。
 - `ecg_receiver/gui`：传统 PyQt 界面。
 
 ## 安全说明
