@@ -27,22 +27,55 @@ from ..core.data_recorder import DataRecorder
 from ..core.circular_buffer import CircularECGBuffer
 from ..core.performance_monitor import PerformanceMonitor
 from ..core.llm_diagnosis import LLMDiagnosisClient, MODEL_PRESETS
+from ..core.ecg_signal import (
+    ADS1292_SAMPLE_RATES,
+    DEFAULT_SAMPLE_RATE,
+    SampleRateTracker,
+    parse_ecg_line,
+    snap_sample_rate,
+)
+from ..core.ecg_demo import fill_demo_buffer, generate_medical_demo_chunk
+from ..core.ads1292_hardware import FIRMWARE_PROFILES, apply_firmware_profile, get_firmware_profile
+from ..core.app_config import (
+    ensure_data_dirs,
+    get_api_config,
+    get_app_icon_path,
+    load_settings,
+    save_settings,
+    RECORDINGS_DIR,
+    DIAGNOSIS_DIR,
+)
 
 class DiagnosisWorker:
     """Worker for ECG diagnosis to prevent UI blocking"""
     
-    def __init__(self, diagnosis_client, ecg_data, patient_info=None, callback=None, error_callback=None):
+    def __init__(
+        self,
+        diagnosis_client,
+        ecg_data,
+        patient_info=None,
+        callback=None,
+        error_callback=None,
+        sample_rate=None,
+        device_hr_bpm=None,
+    ):
         self.diagnosis_client = diagnosis_client
         self.ecg_data = ecg_data
         self.patient_info = patient_info
         self.callback = callback
         self.error_callback = error_callback
+        self.sample_rate = sample_rate
+        self.device_hr_bpm = device_hr_bpm
     
     def start(self):
         """Start diagnosis in background thread"""
         def run_diagnosis():
             try:
-                processed_data = self.diagnosis_client.preprocess_ecg_data(self.ecg_data)
+                processed_data = self.diagnosis_client.preprocess_ecg_data(
+                    self.ecg_data,
+                    sample_rate=getattr(self, "sample_rate", None),
+                    device_hr_bpm=getattr(self, "device_hr_bpm", None),
+                )
                 diagnosis = self.diagnosis_client.diagnose_heart_condition(processed_data, self.patient_info)
                 if self.callback:
                     self.callback(diagnosis)
@@ -78,6 +111,22 @@ class SettingsDialog(ctk.CTkToplevel):
         tabs.add("Serial")
         serial = tabs.tab("Serial")
 
+        ctk.CTkLabel(serial, text="固件配置 (ADS1292R 盾板):", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        profile_labels = [p.label for p in FIRMWARE_PROFILES.values()]
+        self.firmware_profile_combo = ctk.CTkComboBox(
+            serial,
+            values=profile_labels,
+            fg_color=BG_LIGHT,
+            text_color=TEXT_WHITE,
+        )
+        self.firmware_profile_combo.pack(fill="x", padx=10, pady=4)
+        ctk.CTkLabel(
+            serial,
+            text="切换固件后自动设置波特率、采样率、µV/计数",
+            font=ctk.CTkFont(size=10),
+            text_color=TEXT_GRAY,
+        ).pack(anchor="w", padx=10, pady=(0, 4))
+
         ctk.CTkLabel(serial, text="Baud Rate:", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
         self.baud_combo = ctk.CTkComboBox(serial, values=["9600", "19200", "38400", "57600", "115200", "230400"], fg_color=BG_LIGHT, text_color=TEXT_WHITE)
         self.baud_combo.pack(fill="x", padx=10, pady=4)
@@ -102,13 +151,49 @@ class SettingsDialog(ctk.CTkToplevel):
         self.time_window_entry = ctk.CTkEntry(display, fg_color=BG_LIGHT, text_color=TEXT_WHITE)
         self.time_window_entry.pack(fill="x", padx=10, pady=4)
 
-        ctk.CTkLabel(display, text="Sample Rate (Hz):", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
-        self.sample_rate_entry = ctk.CTkEntry(display, fg_color=BG_LIGHT, text_color=TEXT_WHITE)
-        self.sample_rate_entry.pack(fill="x", padx=10, pady=4)
+        ctk.CTkLabel(
+            display,
+            text="Sample Rate (Hz) — ADS1292R 固件实际值:",
+            text_color=TEXT_WHITE,
+        ).pack(anchor="w", padx=10, pady=(10, 0))
+        self.sample_rate_combo = ctk.CTkComboBox(
+            display,
+            values=[str(r) for r in ADS1292_SAMPLE_RATES],
+            fg_color=BG_LIGHT,
+            text_color=TEXT_WHITE,
+        )
+        self.sample_rate_combo.pack(fill="x", padx=10, pady=4)
+
+        ctk.CTkLabel(display, text="采样率模式:", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.sample_rate_mode_combo = ctk.CTkComboBox(
+            display,
+            values=["configured", "auto"],
+            fg_color=BG_LIGHT,
+            text_color=TEXT_WHITE,
+        )
+        self.sample_rate_mode_combo.pack(fill="x", padx=10, pady=4)
+        ctk.CTkLabel(
+            display,
+            text="心率异常时请选 configured 并核对 125/250/500/1000",
+            font=ctk.CTkFont(size=10),
+            text_color=TEXT_GRAY,
+        ).pack(anchor="w", padx=10, pady=(0, 4))
 
         ctk.CTkLabel(display, text="Plot Update Interval (ms):", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
         self.update_interval_entry = ctk.CTkEntry(display, fg_color=BG_LIGHT, text_color=TEXT_WHITE)
         self.update_interval_entry.pack(fill="x", padx=10, pady=4)
+
+        ctk.CTkLabel(display, text="Paper Speed (mm/s):", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.paper_speed_combo = ctk.CTkComboBox(display, values=["12.5", "25", "50"], fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.paper_speed_combo.pack(fill="x", padx=10, pady=4)
+
+        ctk.CTkLabel(display, text="Gain (mm/mV):", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.gain_combo = ctk.CTkComboBox(display, values=["5", "10", "20"], fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.gain_combo.pack(fill="x", padx=10, pady=4)
+
+        ctk.CTkLabel(display, text="µV per count (amplitude scale):", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
+        self.uv_scale_entry = ctk.CTkEntry(display, fg_color=BG_LIGHT, text_color=TEXT_WHITE)
+        self.uv_scale_entry.pack(fill="x", padx=10, pady=4)
 
         ctk.CTkLabel(display, text="Appearance Mode:", text_color=TEXT_WHITE).pack(anchor="w", padx=10, pady=(10, 0))
         self.appearance_combo = ctk.CTkComboBox(display, values=["Dark", "Light", "System"], fg_color=BG_LIGHT, text_color=TEXT_WHITE)
@@ -156,15 +241,31 @@ class SettingsDialog(ctk.CTkToplevel):
         ctk.CTkButton(btn_frame, text="Cancel", fg_color=BG_LIGHT, hover_color=BG_HOVER, command=self.destroy).pack(side="right")
 
     # ── populate from current app state ──────────────────────────────
+    def _profile_label_for_name(self, name: str) -> str:
+        return get_firmware_profile(name).label
+
+    def _profile_name_for_label(self, label: str) -> Optional[str]:
+        for key, profile in FIRMWARE_PROFILES.items():
+            if profile.label == label:
+                return key
+        return None
+
     def _load_current_settings(self):
+        profile_name = getattr(self.app, "_firmware_profile", "protocentral_500")
+        self.firmware_profile_combo.set(self._profile_label_for_name(profile_name))
         self.baud_combo.set(str(getattr(self.app, '_baud_rate', 57600)))
         self.databits_combo.set(str(getattr(self.app, '_data_bits', 8)))
         self.parity_combo.set(getattr(self.app, '_parity', 'None'))
         self.stopbits_combo.set(str(getattr(self.app, '_stop_bits', 1)))
 
         self.time_window_entry.insert(0, str(getattr(self.app.ecg_plot, 'time_window_sec', 10)))
-        self.sample_rate_entry.insert(0, str(int(getattr(self.app.ecg_plot, 'sample_rate', 250))))
+        sr = int(getattr(self.app.ecg_plot, 'sample_rate', DEFAULT_SAMPLE_RATE))
+        self.sample_rate_combo.set(str(snap_sample_rate(sr) or sr))
+        self.sample_rate_mode_combo.set(getattr(self.app, '_sample_rate_mode', 'configured'))
         self.update_interval_entry.insert(0, str(getattr(self.app.ecg_plot, 'update_interval', 50)))
+        self.paper_speed_combo.set(str(getattr(self.app.ecg_plot, 'paper_speed_mm_s', 25)))
+        self.gain_combo.set(str(getattr(self.app.ecg_plot, 'gain_mm_per_mv', 10)))
+        self.uv_scale_entry.insert(0, str(getattr(self.app.ecg_plot, 'uv_per_count', 1.0)))
         self.appearance_combo.set(ctk.get_appearance_mode())
 
         self.auto_interval_entry.insert(0, str(self.app.auto_diagnosis_interval))
@@ -181,9 +282,28 @@ class SettingsDialog(ctk.CTkToplevel):
             self.rec_dir_entry.delete(0, "end")
             self.rec_dir_entry.insert(0, d)
 
+    def _apply_firmware_profile_to_app(self, profile_name: str) -> None:
+        fragment = apply_firmware_profile(profile_name)
+        self.app._firmware_profile = fragment["firmware_profile"]
+        self.app._baud_rate = int(fragment["baud_rate"])
+        self.app.serial_handler.baudrate = self.app._baud_rate
+        self.app.ecg_plot.sample_rate = float(fragment["sample_rate_hz"])
+        self.app.sample_rate_tracker.set_configured_rate(float(fragment["sample_rate_hz"]))
+        self.app.ecg_plot.set_uv_per_count(float(fragment["uv_per_count"]))
+        self.baud_combo.set(str(self.app._baud_rate))
+        self.sample_rate_combo.set(str(int(fragment["sample_rate_hz"])))
+        self.uv_scale_entry.delete(0, "end")
+        self.uv_scale_entry.insert(0, str(fragment["uv_per_count"]))
+
     def _save(self):
         try:
+            label = self.firmware_profile_combo.get()
+            profile_name = self._profile_name_for_label(label)
+            if profile_name:
+                self._apply_firmware_profile_to_app(profile_name)
+
             self.app._baud_rate = int(self.baud_combo.get())
+            self.app.serial_handler.baudrate = self.app._baud_rate
             self.app._data_bits = int(self.databits_combo.get())
             self.app._parity = self.parity_combo.get()
             self.app._stop_bits = float(self.stopbits_combo.get())
@@ -191,12 +311,22 @@ class SettingsDialog(ctk.CTkToplevel):
             tw = float(self.time_window_entry.get())
             if 1 <= tw <= 60:
                 self.app.ecg_plot.time_window_sec = tw
-            sr = int(self.sample_rate_entry.get())
-            if 50 <= sr <= 2000:
+            sr = int(self.sample_rate_combo.get())
+            if sr in ADS1292_SAMPLE_RATES:
                 self.app.ecg_plot.sample_rate = float(sr)
+                self.app.sample_rate_tracker.set_configured_rate(float(sr))
+            mode = self.sample_rate_mode_combo.get().strip().lower()
+            if mode in ("configured", "auto"):
+                self.app._sample_rate_mode = mode
             ui = int(self.update_interval_entry.get())
             if 10 <= ui <= 1000:
                 self.app.ecg_plot.update_interval = ui
+
+            self.app.ecg_plot.set_paper_speed(float(self.paper_speed_combo.get()))
+            self.app.ecg_plot.set_gain(float(self.gain_combo.get()))
+            uv_scale = float(self.uv_scale_entry.get())
+            if uv_scale > 0:
+                self.app.ecg_plot.set_uv_per_count(uv_scale)
 
             mode = self.appearance_combo.get()
             ctk.set_appearance_mode(mode.lower())
@@ -219,6 +349,7 @@ class SettingsDialog(ctk.CTkToplevel):
                 self.app.data_recorder.base_dir = rec_dir
 
             self.app._export_format = self.export_fmt_combo.get()
+            self.app._persist_settings()
 
             self.destroy()
         except Exception as exc:
@@ -229,57 +360,74 @@ class ModernECGMainWindow:
     
     def __init__(self):
         """Initialize the modern ECG GUI"""
+        ensure_data_dirs()
+        self._app_settings = load_settings()
+
         # Configure CustomTkinter
-        ctk.set_appearance_mode("dark")
+        ctk.set_appearance_mode(self._app_settings.get("appearance_mode", "dark"))
         ctk.set_default_color_theme("blue")
         
         # Initialize core components
         self.serial_handler = SerialHandler()
-        self.data_recorder = DataRecorder()
+        self.data_recorder = DataRecorder(base_dir=self._app_settings.get("recordings_dir", str(RECORDINGS_DIR)))
         self.diagnosis_client: Optional[LLMDiagnosisClient] = None
         self.diagnosis_worker: Optional[DiagnosisWorker] = None
         
         # Data management with performance optimizations
-        self.ecg_buffer = CircularECGBuffer(max_size=5000)  # 20 seconds at 250Hz
-        self.raw_ecg_values = []  # Initialize missing attribute for backward compatibility
-        self.diagnosis_buffer_size = 5000
+        configured_sr = float(self._app_settings.get("sample_rate_hz", DEFAULT_SAMPLE_RATE))
+        self.ecg_buffer = CircularECGBuffer(max_size=int(self._app_settings.get("diagnosis_buffer_size", 5000)))
+        self.raw_ecg_values = []
+        self.diagnosis_buffer_size = int(self._app_settings.get("diagnosis_buffer_size", 5000))
         self.packets_received = 0
         self.last_diagnosis = None
         self.diagnosis_history = []
-        self.max_history_size = 50  # Limit diagnosis history for memory management
+        self.max_history_size = int(self._app_settings.get("max_history_size", 50))
         
         # Auto-diagnosis settings
         self.auto_diagnosis_enabled = False
-        self.auto_diagnosis_interval = 30  # seconds
+        self.auto_diagnosis_interval = int(self._app_settings.get("auto_diagnosis_interval_sec", 30))
         self.last_auto_diagnosis = 0
         
         # Settings state
-        self._baud_rate = 57600
-        self._data_bits = 8
-        self._parity = 'None'
-        self._stop_bits = 1
-        self._llm_timeout = 60
-        self._export_format = 'JSON'
+        self._firmware_profile = self._app_settings.get("firmware_profile", "protocentral_500")
+        self._profile_defaults = apply_firmware_profile(self._firmware_profile)
+        self._baud_rate = int(self._app_settings.get("baud_rate", self._profile_defaults["baud_rate"]))
+        self.serial_handler.baudrate = self._baud_rate
+        self._data_bits = int(self._app_settings.get("data_bits", 8))
+        self._parity = self._app_settings.get("parity", "None")
+        self._stop_bits = float(self._app_settings.get("stop_bits", 1))
+        self._llm_timeout = int(self._app_settings.get("llm_timeout_sec", 60))
+        self._export_format = self._app_settings.get("export_format", "JSON")
+        self._sample_rate_mode = self._app_settings.get("sample_rate_mode", "configured")
+        self._diagnosis_export_dir = self._app_settings.get("diagnosis_dir", str(DIAGNOSIS_DIR))
         self._selected_model_preset = list(MODEL_PRESETS.keys())[0]
         
         # Performance monitoring
         self.performance_monitor = PerformanceMonitor()
         self.performance_monitor.start_monitoring()
+
+        self.sample_rate_tracker = SampleRateTracker(configured_rate=configured_sr)
+        self._latest_device_hr: Optional[float] = None
+        self._demo_mode = False
+        self._demo_phase = 0.0
+        self._demo_after_id = None
+        self._demo_bpm = 72.0
         
         self.create_main_window()
         self.setup_ui()
         self.setup_data_processing()
+        self._apply_env_api_config()
         
     def create_main_window(self):
         """Create and configure main window"""
         self.root = ctk.CTk()
-        self.root.title("🫀 ECG AI Heart Diagnosis - Modern Interface")
+        self.root.title("ECG AI 智能心电诊断平台 | Clinical ECG Intelligence")
         self.root.geometry(f"{LAYOUT['window_width']}x{LAYOUT['window_height']}")
         self.root.configure(fg_color=BG_DARK)
         
-        # Configure window icon and properties
         self.root.resizable(True, True)
         self.root.minsize(1200, 700)
+        self._set_window_icon()
         
         # Center window on screen
         self.center_window()
@@ -287,6 +435,20 @@ class ModernECGMainWindow:
         # Configure closing behavior
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
     
+    def _set_window_icon(self) -> None:
+        icon_path = get_app_icon_path(prefer_ico=(sys.platform == "win32"))
+        if not icon_path:
+            return
+        try:
+            if sys.platform == "win32" and icon_path.suffix.lower() == ".ico":
+                self.root.iconbitmap(default=str(icon_path))
+            else:
+                img = tk.PhotoImage(file=str(icon_path))
+                self.root.iconphoto(True, img)
+                self._window_icon_ref = img
+        except Exception:
+            pass
+
     def center_window(self):
         """Center window on screen"""
         self.root.update_idletasks()
@@ -322,7 +484,7 @@ class ModernECGMainWindow:
         # App title with icon
         title_label = ctk.CTkLabel(
             left_header,
-            text="🫀 ECG AI Heart Diagnosis",
+            text="ECG AI 智能心电诊断",
             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SIZES["title"], weight="bold"),
             text_color=TEXT_WHITE
         )
@@ -331,7 +493,7 @@ class ModernECGMainWindow:
         # Subtitle
         subtitle_label = ctk.CTkLabel(
             left_header,
-            text="Real-time monitoring with AI-powered diagnosis",
+            text="实时监护 · 采样率校准 · 大模型辅助判读",
             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SIZES["small"]),
             text_color=TEXT_GRAY
         )
@@ -352,6 +514,15 @@ class ModernECGMainWindow:
         )
         self.settings_btn.pack(side="right", padx=(LAYOUT["padding_sm"], 0), pady=LAYOUT["padding_md"])
         
+        self.quick_start_btn = ModernButton(
+            right_header,
+            text="一键启动",
+            style="success",
+            width=100,
+            command=self.quick_start_workflow,
+        )
+        self.quick_start_btn.pack(side="right", padx=(LAYOUT["padding_sm"], 0), pady=LAYOUT["padding_md"])
+
         # Help button
         self.help_btn = ModernButton(
             right_header,
@@ -378,7 +549,7 @@ class ModernECGMainWindow:
         """Create ECG monitoring panel"""
         self.ecg_panel = ModernCard(
             self.content_frame,
-            title="ECG Real-time Monitor"
+            title="医疗级心电监护  ECG Monitor"
         )
         self.ecg_panel.pack(side="left", fill="both", expand=True, padx=(0, 5))
         
@@ -391,10 +562,24 @@ class ModernECGMainWindow:
         self.ecg_plot = OptimizedECGPlotter(
             plot_frame,
             width=800,
-            height=340,
-            sample_rate=250,
-            time_window_sec=10,
+            height=400,
+            sample_rate=float(
+                self._app_settings.get(
+                    "sample_rate_hz",
+                    self._profile_defaults.get("sample_rate_hz", DEFAULT_SAMPLE_RATE),
+                )
+            ),
+            time_window_sec=float(self._app_settings.get("time_window_sec", 10)),
+            paper_speed_mm_s=float(self._app_settings.get("paper_speed_mm_s", 25)),
+            gain_mm_per_mv=float(self._app_settings.get("gain_mm_per_mv", 10)),
+            uv_per_count=float(
+                self._app_settings.get(
+                    "uv_per_count",
+                    self._profile_defaults.get("uv_per_count", 12.2),
+                )
+            ),
         )
+        self.ecg_plot.update_interval = int(self._app_settings.get("update_interval_ms", 50))
         
         # Control panel
         self.create_control_panel(ecg_content)
@@ -404,7 +589,7 @@ class ModernECGMainWindow:
     
     def create_control_panel(self, parent):
         """Create device control panel"""
-        control_card = ModernCard(parent, title="Device Control")
+        control_card = ModernCard(parent, title="设备控制  Device Control")
         control_card.pack(fill="x", pady=(0, 10))
         
         control_content = control_card.get_content_frame()
@@ -472,6 +657,37 @@ class ModernECGMainWindow:
         # Connection status
         self.connection_status = StatusIndicator(connect_frame, status="disconnected")
         self.connection_status.pack(side="right")
+
+        # Paper speed / gain quick controls
+        scale_frame = ctk.CTkFrame(control_content, fg_color="transparent")
+        scale_frame.pack(fill="x", pady=(0, 8))
+
+        ctk.CTkLabel(scale_frame, text="走纸:", text_color=TEXT_GRAY, font=ctk.CTkFont(size=11)).pack(side="left")
+        self.speed_combo = ctk.CTkComboBox(
+            scale_frame, width=90, values=["12.5", "25", "50"],
+            fg_color=BG_LIGHT, text_color=TEXT_WHITE,
+            command=self._on_paper_speed_changed,
+        )
+        self.speed_combo.set("25")
+        self.speed_combo.pack(side="left", padx=(4, 12))
+
+        ctk.CTkLabel(scale_frame, text="增益:", text_color=TEXT_GRAY, font=ctk.CTkFont(size=11)).pack(side="left")
+        self.gain_quick_combo = ctk.CTkComboBox(
+            scale_frame, width=80, values=["5", "10", "20"],
+            fg_color=BG_LIGHT, text_color=TEXT_WHITE,
+            command=self._on_gain_changed,
+        )
+        self.gain_quick_combo.set("10")
+        self.gain_quick_combo.pack(side="left", padx=(4, 12))
+
+        self.demo_btn = ModernButton(
+            scale_frame,
+            text="演示波形",
+            style="secondary",
+            width=100,
+            command=self.toggle_demo_mode,
+        )
+        self.demo_btn.pack(side="right")
     
     def create_statistics_panel(self, parent):
         """Create real-time statistics panel"""
@@ -483,20 +699,31 @@ class ModernECGMainWindow:
         stats_grid = ctk.CTkFrame(stats_content, fg_color="transparent")
         stats_grid.pack(fill="x")
         
-        for column in range(4):
+        for column in range(5):
             stats_grid.grid_columnconfigure(column, weight=1)
 
-        hr_frame, self.hr_label = self.create_metric_tile(stats_grid, "Heart Rate", "-- BPM", SUCCESS_GREEN)
-        hr_frame.grid(row=0, column=0, padx=(0, 5), pady=5, sticky="ew")
+        hr_frame, self.hr_label = self.create_metric_tile(stats_grid, "心率 HR", "-- BPM", SUCCESS_GREEN)
+        hr_frame.grid(row=0, column=0, padx=(0, 4), pady=5, sticky="ew")
 
-        rhythm_frame, self.rhythm_label = self.create_metric_tile(stats_grid, "Rhythm", "Awaiting data", TEXT_WHITE)
-        rhythm_frame.grid(row=0, column=1, padx=2.5, pady=5, sticky="ew")
+        rhythm_frame, self.rhythm_label = self.create_metric_tile(stats_grid, "节律", "等待数据", TEXT_WHITE)
+        rhythm_frame.grid(row=0, column=1, padx=2, pady=5, sticky="ew")
 
-        quality_frame, self.quality_label = self.create_metric_tile(stats_grid, "Signal Quality", "Awaiting data", TEXT_WHITE)
-        quality_frame.grid(row=0, column=2, padx=2.5, pady=5, sticky="ew")
+        quality_frame, self.quality_label = self.create_metric_tile(stats_grid, "信号质量", "等待数据", TEXT_WHITE)
+        quality_frame.grid(row=0, column=2, padx=2, pady=5, sticky="ew")
 
-        range_frame, self.range_label = self.create_metric_tile(stats_grid, "Trace Range", "--", TEXT_WHITE)
-        range_frame.grid(row=0, column=3, padx=(5, 0), pady=5, sticky="ew")
+        fs_frame, self.sample_rate_label = self.create_metric_tile(stats_grid, "采样率", f"{DEFAULT_SAMPLE_RATE:.0f} Hz", TEXT_WHITE)
+        fs_frame.grid(row=0, column=3, padx=2, pady=5, sticky="ew")
+
+        range_frame, self.range_label = self.create_metric_tile(stats_grid, "幅值 P-P", "-- mV", TEXT_WHITE)
+        range_frame.grid(row=0, column=4, padx=(4, 0), pady=5, sticky="ew")
+
+        self.hr_source_label = ctk.CTkLabel(
+            stats_content,
+            text="心率来源：—",
+            font=ctk.CTkFont(size=10),
+            text_color=TEXT_GRAY,
+        )
+        self.hr_source_label.pack(anchor="w", padx=4, pady=(0, 4))
 
     def create_metric_tile(self, parent, title: str, value: str, value_color: str = TEXT_WHITE):
         """Create a compact metric tile used across the clinician dashboard."""
@@ -521,7 +748,7 @@ class ModernECGMainWindow:
         """Create AI diagnosis panel"""
         self.diagnosis_panel = ModernCard(
             self.content_frame,
-            title="AI Heart Diagnosis"
+            title="AI 智能判读"
         )
         self.diagnosis_panel.pack(side="right", fill="both", expand=False, 
                                 padx=(5, 0), ipadx=LAYOUT["sidebar_width"]-40)
@@ -542,7 +769,7 @@ class ModernECGMainWindow:
     
     def create_api_config(self, parent):
         """Create API configuration section with model selection"""
-        api_card = ModernCard(parent, title="LLM Model & API")
+        api_card = ModernCard(parent, title="大模型与 API")
         api_card.pack(fill="x", pady=(0, 10))
         
         api_content = api_card.get_content_frame()
@@ -627,7 +854,7 @@ class ModernECGMainWindow:
     
     def create_patient_info(self, parent):
         """Create patient information section"""
-        patient_card = ModernCard(parent, title="Patient Information")
+        patient_card = ModernCard(parent, title="患者信息")
         patient_card.pack(fill="x", pady=(0, 10))
         
         patient_content = patient_card.get_content_frame()
@@ -681,7 +908,7 @@ class ModernECGMainWindow:
     
     def create_diagnosis_controls(self, parent):
         """Create diagnosis control section"""
-        control_card = ModernCard(parent, title="Diagnosis Control")
+        control_card = ModernCard(parent, title="判读控制")
         control_card.pack(fill="x", pady=(0, 10))
         
         control_content = control_card.get_content_frame()
@@ -695,7 +922,7 @@ class ModernECGMainWindow:
         
         self.diagnose_btn = ModernButton(
             button_frame,
-            text="Analyze ECG",
+            text="分析心电图",
             style="primary",
             icon="heart",
             state="disabled",
@@ -806,7 +1033,7 @@ class ModernECGMainWindow:
         for column in range(4):
             summary_metrics.grid_columnconfigure(column, weight=1)
 
-        result_hr_frame, self.result_hr_value = self.create_metric_tile(summary_metrics, "Estimated HR", "-- BPM", SUCCESS_GREEN)
+        result_hr_frame, self.result_hr_value = self.create_metric_tile(summary_metrics, "心率", "-- BPM", SUCCESS_GREEN)
         result_hr_frame.grid(row=0, column=0, padx=(0, 5), pady=5, sticky="ew")
 
         result_rhythm_frame, self.result_rhythm_value = self.create_metric_tile(summary_metrics, "Rhythm", "Awaiting data", TEXT_WHITE)
@@ -821,10 +1048,10 @@ class ModernECGMainWindow:
         details_frame = ctk.CTkScrollableFrame(current_tab, fg_color="transparent")
         details_frame.pack(fill="both", expand=True, padx=5, pady=(0, 5))
 
-        self.findings_text = self.create_result_section(details_frame, "Key Findings", height=120)
-        self.actions_text = self.create_result_section(details_frame, "Immediate Actions", height=110)
-        self.follow_up_text = self.create_result_section(details_frame, "Follow-up and Lifestyle", height=110)
-        self.notes_text = self.create_result_section(details_frame, "Clinical Notes", height=140)
+        self.findings_text = self.create_result_section(details_frame, "关键发现", height=120)
+        self.actions_text = self.create_result_section(details_frame, "即时建议", height=110)
+        self.follow_up_text = self.create_result_section(details_frame, "随访与生活方式", height=110)
+        self.notes_text = self.create_result_section(details_frame, "临床备注", height=140)
 
         self.results_tabs.add("History")
         history_tab = self.results_tabs.tab("History")
@@ -913,8 +1140,11 @@ class ModernECGMainWindow:
         self.quality_label.configure(text=quality_label, text_color=quality_color)
         self.result_quality_value.configure(text=quality_label, text_color=quality_color)
 
-        peak_to_peak = metrics.get("peak_to_peak", 0.0)
-        self.range_label.configure(text=f"{peak_to_peak:.0f}", text_color=TEXT_WHITE if peak_to_peak else TEXT_GRAY)
+        ptp_mv = metrics.get("peak_to_peak_mv") or (metrics.get("peak_to_peak", 0.0) / 1000.0)
+        self.range_label.configure(
+            text=f"{ptp_mv:.2f} mV" if ptp_mv else "-- mV",
+            text_color=TEXT_WHITE if ptp_mv else TEXT_GRAY,
+        )
 
         duration = metrics.get("duration_sec", 0.0)
         samples = metrics.get("sample_count", 0)
@@ -922,6 +1152,20 @@ class ModernECGMainWindow:
             self.result_window_value.configure(text=f"{duration:.1f}s | {samples}", text_color=TEXT_WHITE)
         else:
             self.result_window_value.configure(text="--", text_color=TEXT_GRAY)
+
+        fs = metrics.get("sample_rate_hz", self.ecg_plot.sample_rate)
+        mode_tag = "自动" if getattr(self, "_sample_rate_mode", "configured") == "auto" else "配置"
+        self.sample_rate_label.configure(text=f"{fs:.0f} Hz ({mode_tag})", text_color=TEXT_WHITE)
+
+        source_map = {
+            "device": "固件心率",
+            "computed": "R 峰检测",
+            "fused": "固件+R峰融合",
+            "unknown": "—",
+        }
+        self.hr_source_label.configure(
+            text=f"心率来源：{source_map.get(metrics.get('heart_rate_source'), '—')}"
+        )
     
     def create_footer(self):
         """Create footer with status information"""
@@ -953,7 +1197,7 @@ class ModernECGMainWindow:
         # Version info
         version_label = ctk.CTkLabel(
             status_frame,
-            text="ECG AI v2.0",
+            text="ECG AI v3.0 Clinical",
             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SIZES["tiny"]),
             text_color=TEXT_GRAY
         )
@@ -980,6 +1224,10 @@ class ModernECGMainWindow:
     
     def on_closing(self):
         """Handle application closing"""
+        try:
+            self._persist_settings()
+        except Exception:
+            pass
         try:
             self.cancel_scheduled_callbacks()
 
@@ -1017,8 +1265,92 @@ class ModernECGMainWindow:
         except Exception as e:
             print(f"Cleanup error: {e}")
 
+    def _on_paper_speed_changed(self, value: str):
+        try:
+            self.ecg_plot.set_paper_speed(float(value))
+        except ValueError:
+            pass
+
+    def _on_gain_changed(self, value: str):
+        try:
+            self.ecg_plot.set_gain(float(value))
+        except ValueError:
+            pass
+
+    def toggle_demo_mode(self):
+        """Inject synthetic medical ECG for visualization testing."""
+        if self._demo_mode:
+            self.stop_demo_mode()
+            return
+        if self.serial_handler.is_connected:
+            self.show_warning("演示模式", "请先断开串口连接，再启动演示波形。")
+            return
+        self.start_demo_mode()
+
+    def start_demo_mode(self):
+        self._demo_mode = True
+        self._demo_phase = 0.0
+        self.ecg_buffer.clear()
+        self.ecg_plot.clear_data()
+        self.ecg_plot.set_device_heart_rate(self._demo_bpm)
+        self._latest_device_hr = self._demo_bpm
+
+        preload = fill_demo_buffer(
+            total_seconds=self.ecg_plot.time_window_sec + 2,
+            bpm=self._demo_bpm,
+            sample_rate=self._effective_sample_rate(),
+        )
+        for value in preload:
+            self.ecg_buffer.append([value])
+
+        self.demo_btn.configure(text="停止演示", fg_color=WARNING_YELLOW)
+        self.connection_status.update_status("connected")
+        self.update_footer_status("演示模式 — 医疗级模拟心电")
+        self.start_data_processing_loop()
+        self._schedule_demo_tick()
+
+    def stop_demo_mode(self):
+        if not self._demo_mode and self._demo_after_id is None:
+            return
+        self._demo_mode = False
+        if self._demo_after_id is not None:
+            try:
+                self.root.after_cancel(self._demo_after_id)
+            except Exception:
+                pass
+            self._demo_after_id = None
+        if hasattr(self, "demo_btn"):
+            self.demo_btn.configure(text="演示波形")
+        if hasattr(self, "ecg_buffer"):
+            self.ecg_buffer.clear()
+        if hasattr(self, "ecg_plot"):
+            self.ecg_plot.clear_data()
+        if hasattr(self, "connection_status"):
+            self.connection_status.update_status("disconnected")
+        if hasattr(self, "footer_status"):
+            self.update_footer_status("演示已停止")
+
+    def _schedule_demo_tick(self):
+        if not self._demo_mode:
+            return
+        rate = self._effective_sample_rate()
+        chunk = generate_medical_demo_chunk(
+            bpm=self._demo_bpm,
+            sample_rate=rate,
+            seconds=0.1,
+            phase=self._demo_phase,
+        )
+        self._demo_phase += 0.1
+        for value in chunk:
+            self.ecg_buffer.append([value])
+        recent = self.ecg_buffer.get_recent_data(self.ecg_plot.max_points)
+        self.ecg_plot.update_data(recent.tolist(), sample_rate=rate)
+        self.update_clinical_snapshot(self.ecg_plot.get_metrics())
+        self._demo_after_id = self.root.after(100, self._schedule_demo_tick)
+
     def cancel_scheduled_callbacks(self):
         """Cancel recurring Tk callbacks so reconnects and shutdown stay stable."""
+        self.stop_demo_mode()
         for attr_name in ("data_after_id", "auto_diagnosis_after_id", "stats_after_id"):
             callback_id = getattr(self, attr_name, None)
             if callback_id:
@@ -1050,6 +1382,8 @@ class ModernECGMainWindow:
     
     def toggle_connection(self):
         """Connect to or disconnect from the selected serial port"""
+        if self._demo_mode:
+            self.stop_demo_mode()
         if not self.serial_handler.is_connected:
             port = self.port_combo.get()
             if not port:
@@ -1062,6 +1396,7 @@ class ModernECGMainWindow:
             # Connect in background thread
             def connect_thread():
                 try:
+                    self.serial_handler.baudrate = self._baud_rate
                     success = self.serial_handler.connect(port)
                     self.root.after(0, self.on_connection_result, success, port)
                 except Exception as e:
@@ -1174,6 +1509,7 @@ class ModernECGMainWindow:
                     api_url=api_url,
                     model_id=model_id,
                     timeout=self._llm_timeout,
+                    sample_rate=self._effective_sample_rate(),
                 )
                 self.root.after(0, self.on_api_setup_success)
             except Exception as e:
@@ -1212,8 +1548,9 @@ class ModernECGMainWindow:
         patient_info = self.get_patient_info()
         
         # Use optimized circular buffer to get diagnosis data
-        # Get last 2500 samples (10 seconds at 250Hz) for diagnosis
-        available_samples = min(2500, self.ecg_buffer.count)
+        effective_rate = self._effective_sample_rate()
+        window_samples = int(effective_rate * 10)
+        available_samples = min(max(window_samples, 1000), self.ecg_buffer.count)
         ecg_data_for_diagnosis = self.ecg_buffer.get_recent_data(available_samples).tolist()
         
         # Show progress
@@ -1227,7 +1564,9 @@ class ModernECGMainWindow:
             ecg_data_for_diagnosis,
             patient_info,
             callback=self.on_diagnosis_completed,
-            error_callback=self.on_diagnosis_error
+            error_callback=self.on_diagnosis_error,
+            sample_rate=effective_rate,
+            device_hr_bpm=self._latest_device_hr,
         )
         self.diagnosis_worker.start()
         
@@ -1264,7 +1603,7 @@ class ModernECGMainWindow:
         self.update_diagnosis_history()
         
         # Reset UI state
-        self.diagnose_btn.configure(state="normal", text="Analyze ECG")
+        self.diagnose_btn.configure(state="normal", text="分析心电图")
         self.diagnosis_status_label.configure(text="Diagnosis completed", text_color=SUCCESS_GREEN)
         
         severity = diagnosis.get('severity', 'unknown')
@@ -1274,7 +1613,7 @@ class ModernECGMainWindow:
     def on_diagnosis_error(self, error_message: str):
         """Handle diagnosis error"""
         self.progress_indicator.hide()
-        self.diagnose_btn.configure(state="normal", text="Analyze ECG")
+        self.diagnose_btn.configure(state="normal", text="分析心电图")
         self.diagnosis_status_label.configure(text=f"Diagnosis failed: {error_message}", text_color=ERROR_RED)
 
         self.current_severity_badge.configure(text="Analysis Error", fg_color=ERROR_RED, text_color=TEXT_WHITE)
@@ -1358,35 +1697,99 @@ class ModernECGMainWindow:
         else:
             self.data_after_id = None
     
+    def _effective_sample_rate(self) -> float:
+        """Configured or auto-estimated sample rate for time-based metrics."""
+        prefer_auto = getattr(self, "_sample_rate_mode", "configured") == "auto"
+        rate = self.sample_rate_tracker.effective_rate(prefer_auto=prefer_auto)
+        self.ecg_plot.sample_rate = rate
+        if self.diagnosis_client:
+            self.diagnosis_client.sample_rate = rate
+        return rate
+
+    def _apply_env_api_config(self) -> None:
+        """Pre-fill API fields from project .env and auto-connect when key is present."""
+        if not hasattr(self, "api_key_entry"):
+            return
+        cfg = get_api_config()
+        if cfg.get("api_key"):
+            self.api_key_entry.delete(0, "end")
+            self.api_key_entry.insert(0, cfg["api_key"])
+        if cfg.get("api_url"):
+            self.api_url_entry.delete(0, "end")
+            self.api_url_entry.insert(0, cfg["api_url"])
+        if cfg.get("model_id"):
+            self.model_id_entry.delete(0, "end")
+            self.model_id_entry.insert(0, cfg["model_id"])
+        if cfg.get("api_key") and cfg.get("api_url") and cfg.get("model_id"):
+            self.root.after(800, self.setup_diagnosis_api)
+
+    def _persist_settings(self) -> None:
+        """Save current UI settings to data/config/app_settings.json."""
+        payload = {
+            "sample_rate_hz": float(self.ecg_plot.sample_rate),
+            "sample_rate_mode": getattr(self, "_sample_rate_mode", "configured"),
+            "time_window_sec": float(self.ecg_plot.time_window_sec),
+            "update_interval_ms": int(self.ecg_plot.update_interval),
+            "paper_speed_mm_s": float(self.ecg_plot.paper_speed_mm_s),
+            "gain_mm_per_mv": float(self.ecg_plot.gain_mm_per_mv),
+            "uv_per_count": float(self.ecg_plot.uv_per_count),
+            "firmware_profile": getattr(self, "_firmware_profile", "protocentral_500"),
+            "baud_rate": self._baud_rate,
+            "data_bits": self._data_bits,
+            "parity": self._parity,
+            "stop_bits": self._stop_bits,
+            "auto_diagnosis_interval_sec": self.auto_diagnosis_interval,
+            "diagnosis_buffer_size": self.diagnosis_buffer_size,
+            "llm_timeout_sec": self._llm_timeout,
+            "max_history_size": self.max_history_size,
+            "export_format": self._export_format,
+            "recordings_dir": self.data_recorder.base_dir,
+            "diagnosis_dir": getattr(self, "_diagnosis_export_dir", str(DIAGNOSIS_DIR)),
+            "appearance_mode": ctk.get_appearance_mode().lower(),
+        }
+        save_settings(payload)
+        self._app_settings = payload
+
+    def quick_start_workflow(self) -> None:
+        """One-click: env API setup, port scan, and readiness check."""
+        self._apply_env_api_config()
+        self.scan_ports()
+        if not self.diagnosis_client:
+            self.setup_diagnosis_api()
+        self.update_footer_status(
+            "一键启动：已加载 .env API、刷新串口。请选择端口并 Connect，或点击「演示波形」体验。"
+        )
+        self.show_info(
+            "一键启动",
+            "已完成：\n"
+            "1. 从项目 .env 加载 OpenAI 兼容 API\n"
+            "2. 刷新可用串口\n"
+            "3. 数据目录：data/recordings、data/diagnosis\n\n"
+            "若心率约为真实值 2 倍：Settings → Display → Sample Rate 选固件实际值（常见 500 Hz）。",
+        )
+
     def process_ecg_data(self, data: str):
         """Process individual ECG data point with performance optimizations"""
         start_time = time.time()
         
         try:
-            # Parse ECG value (simplified - adapt based on your data format)
-            ecg_value = None
-            
-            if data.startswith('DATA,'):
-                parts = data.split(',')
-                if len(parts) >= 3:
-                    ecg_value = float(parts[2])
-            else:
-                # Try simple numeric format
-                data_clean = data.strip()
-                if data_clean and data_clean.replace('-', '').replace('.', '').isdigit():
-                    ecg_value = float(data_clean)
-            
+            parsed = parse_ecg_line(data)
+            ecg_value = parsed.ecg_value
+
             if ecg_value is not None:
-                # Update statistics
                 self.packets_received += 1
                 self.performance_monitor.record_frame()
-                
-                # Add to optimized circular buffer instead of growing list
+                self.sample_rate_tracker.on_sample(parsed.device_timestamp_ms)
+
+                if parsed.device_hr_bpm is not None:
+                    self._latest_device_hr = parsed.device_hr_bpm
+                    self.ecg_plot.set_device_heart_rate(parsed.device_hr_bpm)
+
                 self.ecg_buffer.append([ecg_value])
-                
-                # Update plot from the current rolling buffer snapshot.
+
+                effective_rate = self._effective_sample_rate()
                 recent_data = self.ecg_buffer.get_recent_data(self.ecg_plot.max_points)
-                self.ecg_plot.update_data(recent_data, sample_rate=250)
+                self.ecg_plot.update_data(recent_data, sample_rate=effective_rate)
                 
                 # Record if enabled
                 if self.data_recorder and self.data_recorder.recording:
@@ -1430,7 +1833,7 @@ class ModernECGMainWindow:
             metrics = self.ecg_plot.get_metrics()
             if metrics.get("sample_count", 0) == 0:
                 recent_data = self.ecg_buffer.get_recent_data(self.ecg_plot.max_points)
-                self.ecg_plot.update_data(recent_data, sample_rate=250)
+                self.ecg_plot.update_data(recent_data, sample_rate=self._effective_sample_rate())
                 metrics = self.ecg_plot.get_metrics()
 
             self.update_clinical_snapshot(metrics)
@@ -1610,7 +2013,9 @@ class ModernECGMainWindow:
         stats_text = f"=== ECG STATISTICS ===\n"
         stats_text += f"Last Updated: {datetime.now().strftime('%H:%M:%S')}\n\n"
         stats_text += f"Sample Count: {self.ecg_buffer.count}\n"
-        stats_text += f"Duration: {self.ecg_buffer.count / 250:.1f} seconds\n\n"
+        rate = self._effective_sample_rate()
+        stats_text += f"Sample Rate: {rate:.1f} Hz (configured/estimated)\n"
+        stats_text += f"Duration: {self.ecg_buffer.count / max(rate, 1):.1f} seconds\n\n"
         stats_text += f"Clinical Summary:\n"
         stats_text += f"- Estimated HR: {self.hr_label.cget('text')}\n"
         stats_text += f"- Rhythm: {metrics.get('rhythm_label', 'Awaiting data')}\n"
@@ -1701,8 +2106,11 @@ class ModernECGMainWindow:
         ext_map = {"JSON": ".json", "CSV": ".csv", "TXT": ".txt"}
         default_ext = ext_map.get(fmt, ".json")
 
+        export_dir = getattr(self, "_diagnosis_export_dir", str(DIAGNOSIS_DIR))
+        os.makedirs(export_dir, exist_ok=True)
         filepath = filedialog.asksaveasfilename(
             defaultextension=default_ext,
+            initialdir=export_dir,
             filetypes=[
                 ("JSON files", "*.json"),
                 ("CSV files", "*.csv"),
@@ -1737,8 +2145,11 @@ class ModernECGMainWindow:
         ext_map = {"JSON": ".json", "CSV": ".csv", "TXT": ".txt"}
         default_ext = ext_map.get(fmt, ".json")
 
+        export_dir = getattr(self, "_diagnosis_export_dir", str(DIAGNOSIS_DIR))
+        os.makedirs(export_dir, exist_ok=True)
         filepath = filedialog.asksaveasfilename(
             defaultextension=default_ext,
+            initialdir=export_dir,
             filetypes=[
                 ("JSON files", "*.json"),
                 ("CSV files", "*.csv"),
@@ -1797,24 +2208,22 @@ class ModernECGMainWindow:
     def show_help(self):
         """Show help dialog"""
         help_text = """
-🫀 ECG AI Heart Diagnosis - Help
+ECG AI 智能心电诊断 — 使用说明
 
-Quick Start:
-1. Enter your Gemini API key
-2. Click 'Setup API'
-3. Select serial port and click 'Connect'
-4. Wait for ECG data, then click 'Analyze ECG'
+快速上手：
+1. 在「大模型与 API」中填写 API Key，点击 Setup API
+2. 选择串口并 Connect，等待实时波形
+3. 确认采样率（ADS1292R 默认 500 Hz，可在 Settings 修改）
+4. 采集约 10 秒后点击「分析心电图」
 
-Features:
-• Real-time ECG monitoring
-• AI-powered heart diagnosis
-• Patient information integration
-• Auto-diagnosis mode
-• Data recording to CSV
+心率说明：
+• 系统已校准采样率，修复以往 2 倍心率偏差
+• 优先使用固件心率；否则用 R 峰检测（0.42s 不应期）
+• 界面显示「心率来源」便于核查
 
-For more help, see README.md
+更多说明见 README_CN.md
         """
-        messagebox.showinfo("Help", help_text)
+        messagebox.showinfo("使用帮助", help_text)
 
 def main():
     """Main entry point for modern ECG GUI"""

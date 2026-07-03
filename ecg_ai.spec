@@ -19,12 +19,18 @@ a = Analysis(
     datas=[
         ('.env.example', '.'),
         ('ecg_receiver', 'ecg_receiver'),
+        ('assets', 'assets'),
     ] + ctk_datas,
     hiddenimports=[
         # ecg_receiver package
         'ecg_receiver',
         'ecg_receiver.diagnosis',
         'ecg_receiver.core',
+        'ecg_receiver.core.app_config',
+        'ecg_receiver.core.ads1292_hardware',
+        'ecg_receiver.core.ecg_signal',
+        'ecg_receiver.core.ecg_demo',
+        'ecg_receiver.core.llm_diagnosis',
         'ecg_receiver.core.serial_handler',
         'ecg_receiver.core.data_recorder',
         'ecg_receiver.core.circular_buffer',
@@ -85,7 +91,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,              # Add .ico path here if you have one
+    icon='assets/app_icon.ico',
     version_file=None,
 )
 

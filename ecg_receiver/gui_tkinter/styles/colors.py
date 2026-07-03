@@ -3,17 +3,18 @@ Modern ECG AI Diagnosis GUI - Colors and Themes
 Based on medical device design principles with dark theme
 """
 
-# Primary Colors - Medical Blue Theme
-PRIMARY_BLUE = "#1e3a8a"      # Deep blue - primary actions
-SECONDARY_BLUE = "#3b82f6"    # Standard blue - secondary elements  
+# Primary Colors - Clinical navy / gold accent (enterprise diagnostic UI)
+PRIMARY_BLUE = "#0c2340"      # Deep navy - primary actions
+SECONDARY_BLUE = "#1d4ed8"    # Clinical blue - secondary elements
 LIGHT_BLUE = "#93c5fd"        # Light blue - accents and highlights
-ACCENT_BLUE = "#60a5fa"       # Medium blue - hover states
+ACCENT_BLUE = "#3b82f6"       # Medium blue - hover states
+ACCENT_GOLD = "#c9a227"       # Premium accent for highlights
 
 # Background Colors - Dark Professional Theme
-BG_DARK = "#0f172a"           # Main dark background
-BG_CARD = "#1e293b"           # Card/panel background
-BG_LIGHT = "#334155"          # Light background elements
-BG_HOVER = "#475569"          # Hover state background
+BG_DARK = "#070d18"           # Main dark background
+BG_CARD = "#111b2e"           # Card/panel background
+BG_LIGHT = "#1a2744"          # Light background elements
+BG_HOVER = "#243352"          # Hover state background
 
 # Text Colors
 TEXT_WHITE = "#ffffff"        # Primary text - high contrast

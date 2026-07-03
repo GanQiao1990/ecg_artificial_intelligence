@@ -3,7 +3,8 @@ REM ECG AI Heart Diagnosis - Windows EXE Builder
 REM Output: dist\ECG_AI_Diagnosis\ECG_AI_Diagnosis.exe
 
 setlocal
-set PYTHON=D:\Users\dell\anaconda3\python.exe
+REM Use current Python if PYTHON not set (portable across machines)
+if not defined PYTHON set PYTHON=python
 set SPEC=ecg_ai.spec
 
 echo ========================================
@@ -23,7 +24,7 @@ echo.
 
 REM --- Install / upgrade build deps ---
 echo [2/4] Installing dependencies...
-"%PYTHON%" -m pip install -q pyinstaller customtkinter matplotlib Pillow psutil pyserial requests numpy python-dotenv
+"%PYTHON%" -m pip install -q -r requirements.txt pyinstaller
 if errorlevel 1 (
     echo ERROR: pip install failed
     pause & exit /b 1
@@ -31,15 +32,24 @@ if errorlevel 1 (
 echo       Dependencies OK
 echo.
 
+REM --- App icon ---
+if not exist "assets\app_icon.ico" (
+    echo [3/5] Generating application icon...
+    "%PYTHON%" scripts\generate_app_icon.py
+) else (
+    echo [3/5] Application icon OK
+)
+echo.
+
 REM --- Clean previous build ---
-echo [3/4] Cleaning old build...
+echo [4/5] Cleaning old build...
 if exist "build"  rmdir /s /q "build"
 if exist "dist"   rmdir /s /q "dist"
 echo       Clean OK
 echo.
 
 REM --- Build ---
-echo [4/4] Running PyInstaller...
+echo [5/5] Running PyInstaller...
 "%PYTHON%" -m PyInstaller %SPEC% --clean --noconfirm
 if errorlevel 1 (
     echo.

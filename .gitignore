@@ -35,7 +35,10 @@ ENV/
 .ipynb_checkpoints
 
 # Project specific
+.env
+.venv/
 ecg_recordings/
+data/config/app_settings.json
 
 # System specific
 .DS_Store

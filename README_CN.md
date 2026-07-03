@@ -1,39 +1,63 @@
-# ECG Receiver Standalone 中文说明
+# ECG AI 智能心电诊断平台
 
-这是一个面向 ESP32 + ADS1292R ECG 设备的实时心电可视化与 AI 辅助诊断项目。
+面向 **ESP32 + ADS1292R** 医疗级心电采集的实时监护与 AI 辅助判读系统。适用于临床演示、科研验证与院前筛查场景。
 
-如果你是第一次接触这个仓库，建议先阅读这份中文说明，再启动图形界面连接设备、查看实时波形，并检查结构化诊断结果。
+> **重要声明**：本软件为可视化与决策支持工具，不能替代执业医师的临床判断，更不能替代急救医疗。
 
 ## 项目仓库
 
-源码地址：[GitHub 仓库](https://github.com/GanQiao1990/ecg_receiver_standalone-)
+源码：[GitHub 仓库](https://github.com/GanQiao1990/ecg_receiver_standalone-)
 
-## 这个程序能做什么
+## 核心能力
 
-- 显示实时心电图，带有临床风格网格和 10 秒滚动窗口。
-- 显示心率、节律规则性、信号质量和波形幅度等关键指标。
-- 将心电片段发送给 AI 诊断服务，生成结构化结论和建议。
-- 将采集到的心电数据保存为 CSV 文件，方便后续分析。
+| 模块 | 说明 |
+|------|------|
+| 实时心电条带 | 10 秒滚动窗口，临床纸格风格网格 |
+| 心率与节律 | 采样率校准 + R 峰检测 + 固件心率融合 |
+| 信号质量 | 信噪比与基线漂移综合评估 |
+| AI 判读 | 多模型 OpenAI 兼容 API，结构化中文报告 |
+| 数据录制 | CSV 导出，便于复盘与科研 |
 
-## 我应该使用哪个界面？
+## v3.0 重要修复：心率计数偏差
 
-如果你是新用户，建议优先使用现代 Tkinter 诊断界面。
+早期版本默认 **250 Hz** 采样率，而 ADS1292R 固件常见输出为 **500 Hz**，会导致：
 
-- 现代 Tkinter 诊断界面：最适合医生查看实时波形和诊断摘要。
-- 传统 PyQt 界面：保留兼容性用途，不建议新用户优先使用。
+- 计算出的 RR 间期减半 → **心率显示约为真实值的 2 倍**
+- 或 R 波与 T 波被重复计数 → 同样出现 2 倍偏差
 
-## 快速开始
+**v3.0 已统一修复：**
 
-### 1. 创建 Python 环境
+1. 默认采样率改为 **500 Hz**（可在 Settings → Display 调整）
+2. 根据串口时间戳与到达速率 **自动估算** 实际采样率
+3. R 峰检测采用 **0.42 s 不应期 + 幅值优先 NMS**，抑制 T 波误检
+4. CSV 格式中的 **固件心率字段** 与算法结果智能融合
+5. 界面显示 **「心率来源」**（固件 / R 峰 / 融合），便于医生核查
 
-建议使用 Python 3.8 及以上版本。最简单的方法是创建虚拟环境。
+## 推荐界面
+
+新用户请使用 **现代 Tkinter 诊断界面**（临床向布局）：
+
+```bash
+python launch_modern_gui.py
+```
+
+传统 PyQt 界面（兼容保留）：
+
+```bash
+python -m ecg_receiver.main
+```
+
+## 环境准备
+
+### 1. Python 环境
+
+建议 Python 3.8+，使用虚拟环境：
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate   # Linux / macOS
+# Windows: .venv\Scripts\activate
 ```
-
-在 Windows 上，请使用 PowerShell 或命令提示符对应的激活命令。
 
 ### 2. 安装依赖
 
@@ -41,73 +65,73 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-如果你愿意，也可以直接运行启动脚本，让它自动补装缺失的 GUI 依赖。
+### 3. 启动
 
-### 3. 启动界面
-
-现代诊断界面：
+在仓库根目录（含 `launch_modern_gui.py`）执行：
 
 ```bash
 python launch_modern_gui.py
 ```
 
-传统 PyQt 界面：
-
-```bash
-python -m ecg_receiver.main
-```
-
-重要说明：
-
-- 请在仓库根目录执行命令（即包含 `launch_modern_gui.py` 的目录）。
-- 如果你的默认 `python` 指向了其他环境（例如 `D:\MGLTOOL\python.exe`），请显式使用你期望的 Python 可执行文件。
-
-Windows 示例：
+Windows 若默认 Python 路径不对，请显式指定：
 
 ```powershell
 & "D:\Users\dell\anaconda3\python.exe" launch_modern_gui.py
 ```
 
-## 新用户操作流程
+## 标准操作流程
 
-1. 启动图形界面。
-2. 选择心电设备对应的串口。
-3. 点击 Connect，等待实时波形出现。
-4. 如果需要 AI 诊断，输入 API Key 和 API URL。
-5. 等待几秒钟后点击 Analyze ECG。
-6. 如果希望自动分析，可启用 Auto Mode，每 30 秒自动分析一次。
+### 第一步：连接硬件
 
-不输入 API Key 也可以使用实时可视化功能。AI 诊断需要有效的 API Key 和网络连接。
+1. ESP32 + ADS1292R 通过 USB 连接电脑  
+2. 启动 `launch_modern_gui.py`  
+3. 在 **Device Control** 选择串口 → **Connect**  
+4. 等待实时波形出现  
 
-## 医生能看到什么
+### 第二步：确认采样与心率
 
-现代诊断界面会把最重要的信息放在最容易阅读的位置：
+1. 观察 **采样率** 指标（默认 500 Hz）  
+2. 若心率仍异常，打开 **Settings → Display**，将 Sample Rate 改为固件实际值（125 / 250 / 500 / 1000）  
+3. 查看 **心率来源**：  
+   - **固件心率**：来自 `DATA,...,hr,...` 字段，最可靠  
+   - **R 峰检测**：纯算法估计  
+   - **融合**：两者一致时取平均  
 
-- 10 秒实时心电图，带临床风格的纸样网格。
-- 心率、节律标签、信号质量和波形幅度，直接显示在监视区旁边。
-- 结构化诊断面板，包括严重程度、置信度、关键发现、即时建议、随访建议和临床备注。
-- 诊断历史标签页，方便对比前后结果。
+### 第三步：配置 AI 判读（可选）
 
-## 硬件要求
+1. 在 **大模型与 API** 选择模型预设  
+2. 填写 **API Key**、**API URL**、**Model ID**  
+3. 点击 **Setup API**，等待状态变为已连接  
+4. 填写患者年龄、性别、症状（可选，提升判读针对性）  
 
-- ESP32 开发板。
-- ADS1292R 心电前端或兼容的心电信号源。
-- USB 连接线。
-- 能把串口数据输出到电脑的心电固件。
+### 第四步：执行分析
 
-默认串口设置通常适用于常见的演示固件：
+1. 采集至少 **10 秒** 稳定波形  
+2. 点击 **分析心电图**  
+3. 在 **Current** 标签查看：严重程度、置信度、关键发现、即时建议、随访与临床备注  
+4. 需要周期性分析时，开启 **Auto Mode**（默认每 30 秒）  
 
-- 波特率：57600
-- 数据源：串口逐行输出
+### 第五步：录制与导出
+
+- **Start Recording**：保存原始心电 CSV  
+- **Export Report**：导出单次 JSON/CSV/TXT 报告  
+- **Export All History**：导出历史判读记录  
+
+## 硬件与串口
+
+| 项目 | 默认值 |
+|------|--------|
+| 主控 | ESP32 |
+| 前端 | ADS1292R |
+| 波特率 | 57600 |
+| 推荐采样率 | 500 Hz |
 
 ## 支持的数据格式
 
-串口读取器支持两种常见格式：
-
-### 标准 CSV 格式
+### 标准 CSV（推荐）
 
 ```text
-DATA,timestamp,ecg_value,resp_value,heart_rate,status
+DATA,timestamp_ms,ecg_value,resp_value,heart_rate,status
 ```
 
 示例：
@@ -116,97 +140,119 @@ DATA,timestamp,ecg_value,resp_value,heart_rate,status
 DATA,1234567890,1024,512,75,OK
 ```
 
-### 简单数字格式
+字段说明：
 
-每一行一个心电采样值：
+- `timestamp_ms`：用于自动估算采样率  
+- `ecg_value`：心电采样值  
+- `heart_rate`：固件计算心率（30–220 范围内自动采用）  
+
+### 简单数值格式
+
+每行一个采样值：
 
 ```text
 -7
--6
--5
 1024
 1050
 ```
 
-如果你的固件使用其他格式，需要调整核心代码里的串口解析逻辑。
+## 界面布局说明
 
-## AI 诊断设置
-
-1. 打开现代诊断界面。
-2. 输入 API Key。
-3. 检查界面中的 API URL，必要时改成你服务商提供的地址。
-4. 点击 Setup API。
-5. 等待连接状态变为可用后再执行分析。
-
-## 录制数据
-
-点击 Start Recording 可以把接收到的心电数据保存为 CSV 文件。这样便于之后复查，也适合交给其他医生一起分析。
-
-## 常见问题排查
-
-### 没有串口可选
-
-- 确认 ESP32 已经正确连接。
-- 检查 USB 线是否支持数据传输，不只是充电。
-- 安装对应开发板的 USB 驱动。
-- 在 Linux 上，把当前用户加入 dialout 组，然后重新登录。
-
-### 看不到心电数据
-
-- 确认设备正在按预期波特率发送串口数据。
-- 检查固件输出格式是否与上面支持的格式之一一致。
-- 重新连接设备，并等待几秒钟让缓冲区填满。
-
-### AI 诊断失败
-
-- 检查 API Key 是否正确。
-- 检查 API URL 是否正确。
-- 确认电脑可以正常访问互联网。
-- 确认已经收集到足够的心电数据后再执行分析。
-
-### 现代界面无法启动
-
-- 重新安装依赖：`pip install -r requirements.txt`
-- 如果 Linux 系统缺少 Tk 支持，请安装发行版对应的 Tk 软件包。
-- 确认你当前目录是项目根目录。
-- 确认 `python` 指向安装了项目依赖的 Python 3 环境。
-
-### 错误：can't open file 'launch_kivy_gui.py'
-
-当前仓库不包含 `launch_kivy_gui.py`，请使用：
-
-```bash
-python launch_modern_gui.py
+```
+┌─────────────────────────────────────────────────────────────┐
+│  ECG AI 智能心电诊断 · 实时监护 · 采样率校准 · 大模型判读    │
+├──────────────────────────────┬──────────────────────────────┤
+│  实时心电条带（10s 滚动）      │  大模型与 API / 患者信息      │
+│  心率 | 节律 | 质量 | 采样率   │  判读控制 / 结构化报告        │
+│  设备连接 / 录制              │  历史记录 / 心电统计          │
+└──────────────────────────────┴──────────────────────────────┘
 ```
 
-Windows 可使用显式 Python 路径：
+## 设置项说明（Settings）
 
-```powershell
-& "D:\Users\dell\anaconda3\python.exe" launch_modern_gui.py
-```
+| 标签 | 关键参数 | 建议 |
+|------|----------|------|
+| Serial | 波特率、数据位 | 与固件一致 |
+| Display | Sample Rate (Hz) | ADS1292R 通常 500 |
+| Display | Time Window | 默认 10 秒 |
+| Diagnosis | Auto Interval | 自动判读间隔（秒） |
+| Data | Recording Directory | CSV 保存路径 |
 
-## 测试命令
+## 常见问题
 
-下面这些命令可以帮助你检查项目是否正常：
+### 心率约为真实值 2 倍
+
+1. 打开 Settings，将 Sample Rate 设为固件实际值（优先试 **500**）  
+2. 若固件输出 `heart_rate` 字段，确认 CSV 格式正确  
+3. 查看「心率来源」是否为 R 峰误检，必要时改善电极接触  
+
+### 心率约为真实值 1/2
+
+将 Sample Rate **调高**（例如 250 → 500）  
+
+### 无串口
+
+- 检查 USB 数据线是否支持数据传输  
+- 安装 CH340 / CP210x 等驱动  
+- Linux：`sudo usermod -aG dialout $USER` 后重新登录  
+
+### 无波形
+
+- 确认波特率 57600  
+- 确认固件输出格式  
+- 重新 Connect 并等待 5–10 秒  
+
+### AI 判读失败
+
+- 检查 API Key 与 URL  
+- 确认网络可达  
+- 确保已采集足够数据（建议 ≥10 s）  
+
+### 界面无法启动
 
 ```bash
+pip install -r requirements.txt
 python -m py_compile launch_modern_gui.py
-python -m py_compile ecg_receiver/gui_tkinter/main_window_modern.py
-python -m py_compile ecg_receiver/gui_tkinter/components/optimized_plotter.py
-python -m py_compile ecg_receiver/core/llm_diagnosis.py
 ```
+
+Linux 需安装 Tk：`sudo apt install python3-tk`
 
 ## 项目结构
 
-- `launch_modern_gui.py`：现代医生查看型 Tkinter 启动器。
-- `ecg_receiver/core`：串口处理、缓冲区、录制和性能监控。
-- `ecg_receiver/gui_tkinter`：面向诊断的现代桌面界面。
-- `ecg_receiver/gui`：传统 PyQt 界面。
+```
+ecg_artificial_intelligence/
+├── launch_modern_gui.py          # 现代诊断界面入口
+├── ecg_receiver/
+│   ├── core/
+│   │   ├── ecg_signal.py         # 采样率校准、R峰、心率（核心）
+│   │   ├── llm_diagnosis.py      # 多模型 AI 判读
+│   │   ├── serial_handler.py     # 串口通信
+│   │   └── circular_buffer.py    # 环形缓冲
+│   └── gui_tkinter/              # 临床诊断 UI
+└── README_CN.md                  # 本说明
+```
 
-## 安全说明
+## 验证命令
 
-本软件是一个可视化与辅助判断工具，不能替代医生的临床判断，也不能替代紧急医疗救治。
+```bash
+python -m py_compile ecg_receiver/core/ecg_signal.py
+python -m py_compile ecg_receiver/gui_tkinter/components/optimized_plotter.py
+python -m py_compile ecg_receiver/core/llm_diagnosis.py
+python -m py_compile ecg_receiver/gui_tkinter/main_window_modern.py
+```
 
-## 建议的下一步
+## 安全与合规
 
-先启动现代 Tkinter 诊断界面，连接设备，确认实时波形和信号指标稳定后，再依赖 AI 诊断摘要。
+- 本系统为 **II 类软件概念演示**，未声明医疗器械注册  
+- 所有 AI 输出须由持证医师审核  
+- 出现胸痛、晕厥、呼吸困难等请立即拨打急救电话  
+
+## 建议下一步
+
+1. 连接设备，确认波形与心率来源稳定  
+2. 与指夹式血氧仪或监护仪心率比对一次  
+3. 再启用 AI 判读作为辅助参考  
+
+---
+
+*ECG AI v3.0 Clinical · 采样率校准版*
