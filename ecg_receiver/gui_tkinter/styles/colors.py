@@ -140,12 +140,12 @@ FONT_WEIGHTS = {
 
 # Layout Constants
 LAYOUT = {
-    "window_width": 1400,
-    "window_height": 900,
+    "window_width": 1600,
+    "window_height": 1000,
     "header_height": 80,
     "footer_height": 40,
-    "sidebar_width": 560,  # Right panel width
-    "main_content_width": 840,  # Left panel width
+    "sidebar_width": 720,  # Right panel width (enlarged for diagnosis results)
+    "main_content_width": 760,  # Left panel width
     
     # Padding and Margins
     "padding_xs": 4,

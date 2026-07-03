@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -21,15 +22,41 @@ from .ads1292_hardware import (
     get_firmware_profile,
 )
 
-# Project root: ecg_artificial_intelligence/
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+def _is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def _app_root() -> Path:
+    """Writable application root.
+
+    In source runs this is the repository root. In PyInstaller one-folder
+    builds it is the folder containing ECG_AI_Diagnosis.exe, so .env and data
+    remain easy for hospital staff to find, back up, and edit.
+    """
+    if _is_frozen():
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+def _bundle_root() -> Path:
+    """Read-only bundled resource root."""
+    if _is_frozen():
+        return Path(getattr(sys, "_MEIPASS", _app_root())).resolve()
+    return _app_root()
+
+
+PROJECT_ROOT = _app_root()
+BUNDLE_ROOT = _bundle_root()
 DATA_ROOT = PROJECT_ROOT / "data"
 RECORDINGS_DIR = DATA_ROOT / "recordings"
 DIAGNOSIS_DIR = DATA_ROOT / "diagnosis"
 CONFIG_DIR = DATA_ROOT / "config"
 SETTINGS_FILE = CONFIG_DIR / "app_settings.json"
 ENV_FILE = PROJECT_ROOT / ".env"
-ASSETS_DIR = PROJECT_ROOT / "assets"
+ENV_EXAMPLE_FILE = PROJECT_ROOT / ".env.example"
+BUNDLED_ENV_FILE = BUNDLE_ROOT / ".env"
+BUNDLED_ENV_EXAMPLE_FILE = BUNDLE_ROOT / ".env.example"
+ASSETS_DIR = BUNDLE_ROOT / "assets" if (BUNDLE_ROOT / "assets").is_dir() else PROJECT_ROOT / "assets"
 APP_ICON_PNG = ASSETS_DIR / "app_icon.png"
 APP_ICON_ICO = ASSETS_DIR / "app_icon.ico"
 
@@ -53,12 +80,14 @@ def ensure_data_dirs() -> None:
 
 def load_env() -> None:
     """Load .env from project root (idempotent)."""
-    if ENV_FILE.is_file():
-        load_dotenv(ENV_FILE, override=False)
-    else:
-        example = PROJECT_ROOT / ".env.example"
-        if example.is_file():
-            load_dotenv(example, override=False)
+    for env_path in (ENV_FILE, BUNDLED_ENV_FILE):
+        if env_path.is_file():
+            load_dotenv(env_path, override=True)
+            return
+    for example_path in (ENV_EXAMPLE_FILE, BUNDLED_ENV_EXAMPLE_FILE):
+        if example_path.is_file():
+            load_dotenv(example_path, override=True)
+            return
 
 
 def get_api_config() -> Dict[str, str]:

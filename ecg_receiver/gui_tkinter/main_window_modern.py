@@ -426,7 +426,7 @@ class ModernECGMainWindow:
         self.root.configure(fg_color=BG_DARK)
         
         self.root.resizable(True, True)
-        self.root.minsize(1200, 700)
+        self.root.minsize(1400, 850)
         self._set_window_icon()
         
         # Center window on screen
@@ -750,34 +750,66 @@ class ModernECGMainWindow:
             self.content_frame,
             title="AI 智能判读"
         )
-        self.diagnosis_panel.pack(side="right", fill="both", expand=False, 
+        self.diagnosis_panel.pack(side="right", fill="both", expand=True,
                                 padx=(5, 0), ipadx=LAYOUT["sidebar_width"]-40)
         
         diagnosis_content = self.diagnosis_panel.get_content_frame()
         
+        # Wrap top controls in a fixed-height frame; give results the rest
+        top_controls = ctk.CTkFrame(diagnosis_content, fg_color="transparent")
+        top_controls.pack(fill="x", side="top")
+        
         # API Configuration
-        self.create_api_config(diagnosis_content)
+        self.create_api_config(top_controls)
         
         # Patient Information
-        self.create_patient_info(diagnosis_content)
+        self.create_patient_info(top_controls)
         
         # Diagnosis Controls
-        self.create_diagnosis_controls(diagnosis_content)
+        self.create_diagnosis_controls(top_controls)
         
-        # Results Display
-        self.create_results_display(diagnosis_content)
+        # Results Display — gets all remaining vertical space
+        results_container = ctk.CTkFrame(diagnosis_content, fg_color="transparent")
+        results_container.pack(fill="both", expand=True, side="top", pady=(4, 0))
+        self.create_results_display(results_container)
     
     def create_api_config(self, parent):
-        """Create API configuration section with model selection"""
-        api_card = ModernCard(parent, title="大模型与 API")
-        api_card.pack(fill="x", pady=(0, 10))
-        
-        api_content = api_card.get_content_frame()
-        
+        """Compact API status bar for clinicians; technical details hidden in collapsible section."""
+        api_bar = ctk.CTkFrame(parent, fg_color=BG_LIGHT, corner_radius=LAYOUT["radius_md"])
+        api_bar.pack(fill="x", pady=(0, 8))
+
+        self.api_status = StatusIndicator(api_bar, status="disconnected")
+        self.api_status.pack(side="left", padx=(10, 4), pady=8)
+
+        self.api_summary_label = ctk.CTkLabel(
+            api_bar,
+            text="API 未连接",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SIZES["small"]),
+            text_color=TEXT_GRAY,
+        )
+        self.api_summary_label.pack(side="left", pady=8)
+
+        self.api_toggle_btn = ModernButton(
+            api_bar,
+            text="⚙ 技术设置",
+            style="secondary",
+            width=90,
+            command=self._toggle_api_details,
+        )
+        self.api_toggle_btn.pack(side="right", padx=(4, 10), pady=6)
+
+        # Collapsible technical details (hidden by default)
+        self._api_details_visible = False
+        self.api_details_frame = ctk.CTkFrame(parent, fg_color="transparent")
+
+        api_inner = ModernCard(self.api_details_frame, title="大模型与 API（技术人员）")
+        api_inner.pack(fill="x")
+        api_content = api_inner.get_content_frame()
+
         # Model preset selector
         model_frame = ctk.CTkFrame(api_content, fg_color="transparent")
-        model_frame.pack(fill="x", pady=(0, 10))
-        
+        model_frame.pack(fill="x", pady=(0, 8))
+
         ctk.CTkLabel(model_frame, text="Model:", text_color=TEXT_WHITE).pack(anchor="w")
         self.model_combo = ctk.CTkComboBox(
             model_frame,
@@ -788,13 +820,13 @@ class ModernECGMainWindow:
             text_color=TEXT_WHITE,
             command=self._on_model_preset_changed,
         )
-        self.model_combo.pack(fill="x", pady=(5, 0))
+        self.model_combo.pack(fill="x", pady=(4, 0))
         self.model_combo.set(self._selected_model_preset)
-        
+
         # API Key input
         key_frame = ctk.CTkFrame(api_content, fg_color="transparent")
-        key_frame.pack(fill="x", pady=(0, 10))
-        
+        key_frame.pack(fill="x", pady=(0, 8))
+
         ctk.CTkLabel(key_frame, text="API Key:", text_color=TEXT_WHITE).pack(anchor="w")
         self.api_key_entry = ctk.CTkEntry(
             key_frame,
@@ -804,12 +836,12 @@ class ModernECGMainWindow:
             border_color=TEXT_GRAY,
             text_color=TEXT_WHITE
         )
-        self.api_key_entry.pack(fill="x", pady=(5, 0))
-        
-        # API URL input  
+        self.api_key_entry.pack(fill="x", pady=(4, 0))
+
+        # API URL input
         url_frame = ctk.CTkFrame(api_content, fg_color="transparent")
-        url_frame.pack(fill="x", pady=(0, 10))
-        
+        url_frame.pack(fill="x", pady=(0, 8))
+
         ctk.CTkLabel(url_frame, text="API URL:", text_color=TEXT_WHITE).pack(anchor="w")
         self.api_url_entry = ctk.CTkEntry(
             url_frame,
@@ -817,11 +849,11 @@ class ModernECGMainWindow:
             border_color=TEXT_GRAY,
             text_color=TEXT_WHITE
         )
-        self.api_url_entry.pack(fill="x", pady=(5, 0))
+        self.api_url_entry.pack(fill="x", pady=(4, 0))
 
         # Model ID input (for custom)
         model_id_frame = ctk.CTkFrame(api_content, fg_color="transparent")
-        model_id_frame.pack(fill="x", pady=(0, 10))
+        model_id_frame.pack(fill="x", pady=(0, 8))
 
         ctk.CTkLabel(model_id_frame, text="Model ID:", text_color=TEXT_WHITE).pack(anchor="w")
         self.model_id_entry = ctk.CTkEntry(
@@ -831,26 +863,34 @@ class ModernECGMainWindow:
             text_color=TEXT_WHITE,
             placeholder_text="e.g. gpt-4o, gemini-pro"
         )
-        self.model_id_entry.pack(fill="x", pady=(5, 0))
+        self.model_id_entry.pack(fill="x", pady=(4, 0))
 
         # Populate from default preset
         self._on_model_preset_changed(self._selected_model_preset)
-        
-        # Setup button and status
+
+        # Setup button
         setup_frame = ctk.CTkFrame(api_content, fg_color="transparent")
         setup_frame.pack(fill="x")
-        
+
         self.setup_api_btn = ModernButton(
             setup_frame,
-            text="Setup API",
+            text="连接 API",
             style="primary",
             width=100,
             command=self.setup_diagnosis_api
         )
         self.setup_api_btn.pack(side="left")
-        
-        self.api_status = StatusIndicator(setup_frame, status="disconnected")
-        self.api_status.pack(side="right")
+
+    def _toggle_api_details(self):
+        """Show/hide technical API configuration for technicians."""
+        if self._api_details_visible:
+            self.api_details_frame.pack_forget()
+            self._api_details_visible = False
+            self.api_toggle_btn.configure(text="⚙ 技术设置")
+        else:
+            self.api_details_frame.pack(fill="x", pady=(0, 8))
+            self._api_details_visible = True
+            self.api_toggle_btn.configure(text="收起设置")
     
     def create_patient_info(self, parent):
         """Create patient information section"""
@@ -1048,10 +1088,10 @@ class ModernECGMainWindow:
         details_frame = ctk.CTkScrollableFrame(current_tab, fg_color="transparent")
         details_frame.pack(fill="both", expand=True, padx=5, pady=(0, 5))
 
-        self.findings_text = self.create_result_section(details_frame, "关键发现", height=120)
-        self.actions_text = self.create_result_section(details_frame, "即时建议", height=110)
-        self.follow_up_text = self.create_result_section(details_frame, "随访与生活方式", height=110)
-        self.notes_text = self.create_result_section(details_frame, "临床备注", height=140)
+        self.findings_text = self.create_result_section(details_frame, "关键发现", height=300)
+        self.actions_text = self.create_result_section(details_frame, "即时建议", height=280)
+        self.follow_up_text = self.create_result_section(details_frame, "随访与生活方式", height=280)
+        self.notes_text = self.create_result_section(details_frame, "临床备注", height=350)
 
         self.results_tabs.add("History")
         history_tab = self.results_tabs.tab("History")
@@ -1101,7 +1141,7 @@ class ModernECGMainWindow:
             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SIZES["body"]),
             wrap="word"
         )
-        textbox.pack(fill="x", padx=12, pady=(0, 12))
+        textbox.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         textbox.configure(state="disabled")
         return textbox
 
@@ -1295,6 +1335,12 @@ class ModernECGMainWindow:
         self.ecg_plot.set_device_heart_rate(self._demo_bpm)
         self._latest_device_hr = self._demo_bpm
 
+        # Demo generator emits values already in microvolts, unlike raw ADC
+        # counts from real hardware. Bypass the counts->µV gain so the
+        # synthetic waveform isn't over-amplified (avoids axis clipping).
+        self._pre_demo_uv_per_count = self.ecg_plot.uv_per_count
+        self.ecg_plot.set_uv_per_count(1.0)
+
         preload = fill_demo_buffer(
             total_seconds=self.ecg_plot.time_window_sec + 2,
             bpm=self._demo_bpm,
@@ -1309,10 +1355,18 @@ class ModernECGMainWindow:
         self.start_data_processing_loop()
         self._schedule_demo_tick()
 
+        # Enable diagnosis button in demo mode even without API
+        if hasattr(self, "diagnose_btn"):
+            self.diagnose_btn.configure(state="normal")
+
     def stop_demo_mode(self):
         if not self._demo_mode and self._demo_after_id is None:
             return
         self._demo_mode = False
+        pre_demo_uv = getattr(self, "_pre_demo_uv_per_count", None)
+        if pre_demo_uv is not None and hasattr(self, "ecg_plot"):
+            self.ecg_plot.set_uv_per_count(pre_demo_uv)
+            self._pre_demo_uv_per_count = None
         if self._demo_after_id is not None:
             try:
                 self.root.after_cancel(self._demo_after_id)
@@ -1519,20 +1573,27 @@ class ModernECGMainWindow:
     
     def on_api_setup_success(self):
         """Handle successful API setup"""
-        self.setup_api_btn.configure(text="Setup API", state="normal")
+        self.setup_api_btn.configure(text="已连接", state="normal")
         self.api_status.update_status("connected")
+        if hasattr(self, "api_summary_label"):
+            self.api_summary_label.configure(text="API 已连接 · 可进行 AI 判读", text_color=SUCCESS_GREEN)
         self.diagnose_btn.configure(state="normal" if self.ecg_buffer.count > 100 else "disabled")
         self.show_success("API Setup", "Diagnosis API configured successfully!")
         
     def on_api_setup_error(self, error_msg: str):
         """Handle API setup error"""
-        self.setup_api_btn.configure(text="Setup API", state="normal") 
+        self.setup_api_btn.configure(text="连接 API", state="normal")
         self.api_status.update_status("error")
+        if hasattr(self, "api_summary_label"):
+            self.api_summary_label.configure(text="API 连接失败", text_color=ERROR_RED)
         self.show_error("API Setup Error", f"Failed to setup API: {error_msg}")
     
     def start_diagnosis(self):
         """Start ECG diagnosis analysis with performance optimizations"""
         if not self.diagnosis_client:
+            if self._demo_mode:
+                self._run_demo_diagnosis()
+                return
             self.show_warning("Diagnosis", "Please setup the API first.")
             return
         
@@ -1554,6 +1615,7 @@ class ModernECGMainWindow:
         ecg_data_for_diagnosis = self.ecg_buffer.get_recent_data(available_samples).tolist()
         
         # Show progress
+        self._diag_start_time = time.time()
         self.progress_indicator.show_progress(0.1, "Starting diagnosis...")
         self.diagnose_btn.configure(state="disabled", text="Analyzing...")
         self.diagnosis_status_label.configure(text="Analyzing ECG data...", text_color=SECONDARY_BLUE)
@@ -1574,12 +1636,123 @@ class ModernECGMainWindow:
         self.update_diagnosis_progress()
     
     def update_diagnosis_progress(self):
-        """Update diagnosis progress indicator"""
+        """Update diagnosis progress indicator with detailed stage messages"""
         if self.diagnosis_worker and hasattr(self.diagnosis_worker, 'thread') and self.diagnosis_worker.thread.is_alive():
-            # Simulate progress
-            progress = min(0.9, time.time() % 30 / 30)  # Max 90% until complete
-            self.progress_indicator.show_progress(progress, "Analyzing with AI...")
+            elapsed = time.time() - getattr(self, '_diag_start_time', time.time())
+            stages = [
+                (0.15, "Extracting ECG features..."),
+                (0.30, "Detecting R-peaks & QRS morphology..."),
+                (0.50, "Computing HRV & rhythm metrics..."),
+                (0.70, "Sending data to AI model..."),
+                (0.85, "AI analyzing cardiac patterns..."),
+                (0.90, "Generating clinical report..."),
+            ]
+            progress = min(0.9, elapsed / 20.0)
+            stage_msg = "Analyzing with AI..."
+            for threshold, msg in stages:
+                if progress < threshold:
+                    stage_msg = msg
+                    break
+            self.progress_indicator.show_progress(progress, stage_msg)
+            self.diagnosis_status_label.configure(text=stage_msg, text_color=SECONDARY_BLUE)
             self.root.after(500, self.update_diagnosis_progress)
+    
+    def _run_demo_diagnosis(self):
+        """Simulate AI diagnosis in demo mode with step-by-step progress display."""
+        if self.ecg_buffer.count < 100:
+            self.show_warning("Diagnosis", "Not enough ECG data for analysis. Please wait for more data.")
+            return
+
+        self._diag_start_time = time.time()
+        self.diagnose_btn.configure(state="disabled", text="Analyzing...")
+        self.results_tabs.set("Current")
+
+        steps = [
+            (0.10, "Extracting ECG features..."),
+            (0.25, "Detecting R-peaks & QRS morphology..."),
+            (0.40, "Computing HRV & rhythm metrics..."),
+            (0.60, "Sending data to AI model..."),
+            (0.75, "AI analyzing cardiac patterns..."),
+            (0.90, "Generating clinical report..."),
+        ]
+
+        def _advance_step(step_idx):
+            if step_idx >= len(steps):
+                self._complete_demo_diagnosis()
+                return
+            progress, msg = steps[step_idx]
+            self.progress_indicator.show_progress(progress, msg)
+            self.diagnosis_status_label.configure(text=msg, text_color=SECONDARY_BLUE)
+            self.current_primary_label.configure(text=msg, text_color=SECONDARY_BLUE)
+            self.root.after(600, _advance_step, step_idx + 1)
+
+        _advance_step(0)
+
+    def _complete_demo_diagnosis(self):
+        """Generate a realistic demo diagnosis result and display it."""
+        metrics = self.ecg_plot.get_metrics()
+        hr = metrics.get("heart_rate_bpm") or 72
+        ptp = metrics.get("peak_to_peak_mv") or 1.2
+        rhythm = metrics.get("rhythm_label", "Normal Sinus Rhythm")
+        quality = metrics.get("signal_quality_label", "Good")
+
+        demo_result = {
+            "severity": "low",
+            "primary_diagnosis": f"Normal Sinus Rhythm — HR {hr:.0f} bpm, Regular R-R intervals",
+            "confidence": 0.92,
+            "timestamp": datetime.now().isoformat(),
+            "model_used": "Demo AI (simulated)",
+            "key_findings": [
+                f"Heart rate: {hr:.0f} bpm (normal range 60-100)",
+                f"Rhythm: {rhythm} — regular R-R intervals detected",
+                f"Signal quality: {quality}",
+                f"Peak-to-peak amplitude: {ptp:.2f} mV (within normal range)",
+                "P-wave morphology: normal amplitude and duration",
+                "QRS complex: narrow (<120 ms), no conduction abnormalities",
+                "ST segment: no elevation or depression observed",
+                "T-wave: normal morphology, no inversion",
+            ],
+            "recommendations": {
+                "immediate_actions": [
+                    "No immediate clinical intervention required",
+                    "Continue routine cardiac monitoring",
+                    "Document baseline ECG for future comparison",
+                ],
+                "follow_up": [
+                    "Routine follow-up in 6-12 months recommended",
+                    "Annual cardiac check-up advised for patients over 40",
+                ],
+                "lifestyle": [
+                    "Maintain regular cardiovascular exercise (150 min/week)",
+                    "Monitor blood pressure regularly",
+                    "Maintain healthy diet low in sodium and saturated fats",
+                ],
+            },
+            "secondary_conditions": [],
+            "normal_ranges_comparison": {
+                "heart_rate": f"{hr:.0f} bpm (normal: 60-100)",
+                "pr_interval": "160 ms (normal: 120-200 ms)",
+                "qrs_duration": "90 ms (normal: 80-120 ms)",
+                "qt_interval": "380 ms (normal: 350-440 ms)",
+            },
+            "risk_factors": [],
+            "prognosis": "Excellent — normal cardiac function with no significant risk factors identified.",
+        }
+
+        self.progress_indicator.show_progress(1.0, "Diagnosis complete!")
+        self.root.after(800, self.progress_indicator.hide)
+        self.last_diagnosis = demo_result
+        self.diagnosis_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "diagnosis": demo_result,
+        })
+        if len(self.diagnosis_history) > self.max_history_size:
+            self.diagnosis_history = self.diagnosis_history[-self.max_history_size:]
+        self.display_diagnosis(demo_result)
+        self.update_diagnosis_history()
+        self.diagnose_btn.configure(state="normal", text="分析心电图")
+        self.diagnosis_status_label.configure(text="Demo diagnosis completed", text_color=SUCCESS_GREEN)
+        self.update_footer_diagnosis(f"Last Diagnosis: Normal ({demo_result['confidence']:.0%})")
     
     def on_diagnosis_completed(self, diagnosis: Dict[str, Any]):
         """Handle completed diagnosis with history management"""
@@ -1711,6 +1884,7 @@ class ModernECGMainWindow:
         if not hasattr(self, "api_key_entry"):
             return
         cfg = get_api_config()
+        has_env = bool(cfg.get("api_key") and cfg.get("api_url") and cfg.get("model_id"))
         if cfg.get("api_key"):
             self.api_key_entry.delete(0, "end")
             self.api_key_entry.insert(0, cfg["api_key"])
@@ -1720,7 +1894,10 @@ class ModernECGMainWindow:
         if cfg.get("model_id"):
             self.model_id_entry.delete(0, "end")
             self.model_id_entry.insert(0, cfg["model_id"])
-        if cfg.get("api_key") and cfg.get("api_url") and cfg.get("model_id"):
+        if has_env:
+            # Switch to Custom so preset callbacks don't overwrite .env values
+            self.model_combo.set("Custom / Local")
+            self._selected_model_preset = "Custom / Local"
             self.root.after(800, self.setup_diagnosis_api)
 
     def _persist_settings(self) -> None:
@@ -2082,8 +2259,13 @@ class ModernECGMainWindow:
         SettingsDialog(self)
 
     def _on_model_preset_changed(self, preset_name: str):
-        """Populate API URL and Model ID from the selected preset."""
+        """Populate API URL and Model ID from the selected preset.
+
+        For 'Custom / Local' the fields are left untouched so .env values survive.
+        """
         self._selected_model_preset = preset_name
+        if preset_name == "Custom / Local":
+            return
         preset = MODEL_PRESETS.get(preset_name, {})
         url = preset.get("api_url", "")
         mid = preset.get("model_id", "")

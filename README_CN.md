@@ -241,6 +241,18 @@ python -m py_compile ecg_receiver/core/llm_diagnosis.py
 python -m py_compile ecg_receiver/gui_tkinter/main_window_modern.py
 ```
 
+## Windows EXE 打包
+
+在 Windows 10/11 电脑上双击运行：
+
+```bat
+build_exe.bat
+```
+
+成功后分发 `dist\ECG_AI_Diagnosis_Windows.zip`，或分发整个 `dist\ECG_AI_Diagnosis\` 文件夹。发布包内已包含运行依赖、`.env` 配置、数据目录和医护人员说明文档。
+
+更多细节见 [PACKAGING_WINDOWS_CN.md](PACKAGING_WINDOWS_CN.md)。
+
 ## 安全与合规
 
 - 本系统为 **II 类软件概念演示**，未声明医疗器械注册  

@@ -62,6 +62,7 @@ class OptimizedECGPlotter:
         self.trace_color = "#1a1a2e"
         self.reference_color = "#64748b"
         self.text_color = "#1e293b"
+        self.metric_bg = "#fffcfd"
 
         self._y_span_mv = 2.0
         self._y_center_mv = 0.0
@@ -77,25 +78,28 @@ class OptimizedECGPlotter:
         self.line, = self.ax.plot([], [], color=self.trace_color, linewidth=1.2, solid_capstyle="round")
         self.baseline_line = self.ax.axhline(0.0, color=self.reference_color, linewidth=0.6, linestyle=":", alpha=0.6)
         self.metric_text = self.ax.text(
-            0.02,
-            0.98,
-            "等待心电数据",
+            0.01,
+            0.99,
+            "Awaiting ECG data",
             transform=self.ax.transAxes,
             va="top",
             ha="left",
-            fontsize=8,
+            fontsize=7,
             color=self.text_color,
-            bbox={"boxstyle": "round,pad=0.3", "facecolor": "#fffcfd", "edgecolor": "#e2e8f0", "linewidth": 0.6},
+            family="monospace",
+            linespacing=1.6,
+            bbox={"boxstyle": "round,pad=0.25", "facecolor": self.metric_bg, "edgecolor": "#e2e8f0", "linewidth": 0.5, "alpha": 0.92},
         )
         self.scale_text = self.ax.text(
-            0.98,
-            0.02,
+            0.99,
+            0.01,
             self._scale_label(),
             transform=self.ax.transAxes,
             va="bottom",
             ha="right",
-            fontsize=8,
+            fontsize=7,
             color=self.reference_color,
+            family="monospace",
         )
 
         self.canvas = FigureCanvas(self.fig, parent_widget)
@@ -110,7 +114,7 @@ class OptimizedECGPlotter:
         self._device_hr_bpm: Optional[float] = None
 
         self._apply_medical_limits(-self._y_span_mv, self._y_span_mv)
-        self.fig.subplots_adjust(left=0.07, right=0.98, top=0.92, bottom=0.12)
+        self.fig.subplots_adjust(left=0.08, right=0.99, top=0.93, bottom=0.14)
         self.canvas.draw_idle()
 
     def _aspect_ratio(self) -> float:
@@ -123,14 +127,13 @@ class OptimizedECGPlotter:
     def _configure_axes(self):
         self.ax.set_facecolor(self.paper_bg)
         self.ax.set_axisbelow(True)
-        self.ax.set_title("医疗级心电条带  Medical ECG Strip", fontsize=11, color=self.text_color, pad=8)
-        self.ax.set_xlabel("时间 Time (s)", fontsize=9, color=self.reference_color)
-        self.ax.set_ylabel("电压 Amplitude (mV)", fontsize=9, color=self.reference_color)
-        self.ax.set_aspect(self._aspect_ratio(), adjustable="box")
+        self.ax.set_title("Medical ECG Strip", fontsize=10, color=self.text_color, pad=6)
+        self.ax.set_xlabel("Time (s)", fontsize=8, color=self.reference_color)
+        self.ax.set_ylabel("Amplitude (mV)", fontsize=8, color=self.reference_color)
         for spine in self.ax.spines.values():
             spine.set_color("#cbd5e1")
             spine.set_linewidth(0.8)
-        self.ax.tick_params(axis="both", which="major", labelsize=8, colors=self.reference_color)
+        self.ax.tick_params(axis="both", which="major", labelsize=7, colors=self.reference_color)
         self.ax.tick_params(axis="both", which="minor", length=2, color=self.reference_color)
 
     def _apply_medical_grid(self):
@@ -145,7 +148,6 @@ class OptimizedECGPlotter:
         self.ax.set_xlim(-self.time_window_sec, 0.0)
         self.ax.set_ylim(y_min_mv, y_max_mv)
         self._apply_medical_grid()
-        self.ax.set_aspect(self._aspect_ratio(), adjustable="box")
 
     def _counts_to_mv(self, data: np.ndarray) -> np.ndarray:
         """ADS1292-style counts/µV → millivolts for clinical axis."""
@@ -160,8 +162,8 @@ class OptimizedECGPlotter:
 
         center = float(np.median(y_mv))
         ptp = float(np.ptp(y_mv))
-        half = max(0.5, math.ceil(max(ptp * 0.65, 0.4) / AMP_MAJOR_MV) * AMP_MAJOR_MV)
-        half = min(half, 3.0)
+        half = max(0.5, math.ceil(max(ptp * 0.85, 0.5) / AMP_MAJOR_MV) * AMP_MAJOR_MV)
+        half = min(half, 4.0)
         self._y_center_mv = center
         self._y_span_mv = half
         y_min = math.floor((center - half) / AMP_MAJOR_MV) * AMP_MAJOR_MV
@@ -187,7 +189,6 @@ class OptimizedECGPlotter:
             self.uv_per_count = float(scale)
 
     def _on_resize(self, _event):
-        self.ax.set_aspect(self._aspect_ratio(), adjustable="box")
         self.canvas.draw_idle()
 
     def _empty_metrics(self) -> Dict[str, Any]:
@@ -248,17 +249,18 @@ class OptimizedECGPlotter:
     def _format_metric_text(self) -> str:
         metrics = self.last_metrics
         heart_rate = metrics.get("heart_rate_bpm")
-        heart_rate_text = f"HR {heart_rate:.0f}" if heart_rate else "HR --"
-        source = metrics.get("heart_rate_source", "")
-        source_hint = {"device": "固件", "computed": "R峰", "fused": "融合"}.get(source, "")
+        heart_rate_text = f"HR  {heart_rate:.0f} bpm" if heart_rate else "HR  -- bpm"
         ptp = metrics.get("peak_to_peak_mv", 0.0)
-        return "\n".join(filter(None, [
+        rhythm = metrics.get("rhythm_label", "Awaiting")[:10]
+        quality = metrics.get("signal_quality_label", "Awaiting")[:10]
+        fs = metrics.get("sample_rate_hz", self.sample_rate)
+        return "\n".join([
             heart_rate_text,
-            f"节律 {metrics['rhythm_label'][:12]}",
-            f"质量 {metrics['signal_quality_label'][:10]}",
-            f"PP {ptp:.2f} mV" if ptp else None,
-            f"Fs {metrics.get('sample_rate_hz', self.sample_rate):.0f}",
-        ]))
+            f"Rhythm  {rhythm}",
+            f"Quality {quality}",
+            f"PP  {ptp:.2f} mV" if ptp else "PP  -- mV",
+            f"Fs  {fs:.0f} Hz",
+        ])
 
     def update_data(self, new_data: List[float], sample_rate: Optional[float] = None):
         current_time = time.time() * 1000.0
@@ -311,7 +313,7 @@ class OptimizedECGPlotter:
         self.last_metrics = self._empty_metrics()
         self.line.set_data([], [])
         self._apply_medical_limits(-self._y_span_mv, self._y_span_mv)
-        self.metric_text.set_text("等待心电数据")
+        self.metric_text.set_text("Awaiting ECG data")
         self.canvas.draw_idle()
 
     def clear_plot(self):

@@ -20,7 +20,12 @@ def generate_medical_demo_chunk(
     """
     Generate one chunk of realistic single-lead ECG in microvolts (µV).
 
-    P–QRS–T morphology at clinical amplitude (~1.2 mV QRS).
+    Classic P–QRS–T morphology:
+      - P wave: small atrial bump (~0.15 mV)
+      - Q wave: small negative deflection
+      - R wave: sharp tall positive spike (~1.2 mV)
+      - S wave: negative deflection below baseline
+      - T wave: broader ventricular repolarization bump (~0.3 mV)
     """
     n = max(1, int(sample_rate * seconds))
     t = (np.arange(n, dtype=np.float64) / sample_rate) + phase
@@ -31,28 +36,42 @@ def generate_medical_demo_chunk(
         ti = t[i]
         beat_phase = (ti % rr) / rr
 
-        # P wave (~0.08–0.12 mV)
+        # P wave (~0.08–0.12 mV) — atrial depolarization
         p_center = 0.12
-        p_width = 0.04
+        p_width = 0.025
         if abs(beat_phase - p_center) < p_width:
             x = (beat_phase - p_center) / p_width
             signal[i] += 0.15 * amplitude_uv * math.exp(-x * x * 4)
 
-        # QRS (~1.0–1.5 mV)
-        qrs_center = 0.32
-        qrs_width = 0.035
-        if abs(beat_phase - qrs_center) < qrs_width:
-            x = (beat_phase - qrs_center) / qrs_width
-            signal[i] += amplitude_uv * math.exp(-x * x * 6)
+        # Q wave — small negative dip just before R
+        q_center = 0.305
+        q_width = 0.012
+        if abs(beat_phase - q_center) < q_width:
+            x = (beat_phase - q_center) / q_width
+            signal[i] -= 0.12 * amplitude_uv * math.exp(-x * x * 8)
 
-        # T wave (~0.2–0.35 mV), suppressed vs R
+        # R wave — sharp tall positive spike
+        r_center = 0.32
+        r_width = 0.014
+        if abs(beat_phase - r_center) < r_width:
+            x = (beat_phase - r_center) / r_width
+            signal[i] += 1.0 * amplitude_uv * math.exp(-x * x * 12)
+
+        # S wave — negative deflection after R
+        s_center = 0.335
+        s_width = 0.016
+        if abs(beat_phase - s_center) < s_width:
+            x = (beat_phase - s_center) / s_width
+            signal[i] -= 0.22 * amplitude_uv * math.exp(-x * x * 8)
+
+        # T wave (~0.2–0.35 mV) — ventricular repolarization
         t_center = 0.55
-        t_width = 0.08
+        t_width = 0.06
         if abs(beat_phase - t_center) < t_width:
             x = (beat_phase - t_center) / t_width
             signal[i] += 0.28 * amplitude_uv * math.exp(-x * x * 3)
 
-    noise = np.random.randn(n) * amplitude_uv * 0.012
+    noise = np.random.randn(n) * amplitude_uv * 0.008
     return (signal + noise).astype(np.float64).tolist()
 
 

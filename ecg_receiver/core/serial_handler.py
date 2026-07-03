@@ -25,9 +25,18 @@ class SerialHandler:
         self.max_reconnect_attempts = 5
     
     def list_ports(self):
-        """List available serial ports."""
+        """List available serial ports with detailed info."""
         ports = serial.tools.list_ports.comports()
-        return [port.device for port in ports]
+        result = []
+        for port in sorted(ports, key=lambda p: p.device):
+            result.append({
+                "device": port.device,
+                "description": port.description or "",
+                "hwid": port.hwid or "",
+                "manufacturer": getattr(port, "manufacturer", "") or "",
+                "product": getattr(port, "product", "") or "",
+            })
+        return result
     
     def connect(self, port):
         """Connect to the specified serial port.

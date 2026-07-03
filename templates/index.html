@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ECG AI Diagnosis</title>
+<style>
+:root {
+  --bg: #0a0e1a;
+  --card: #111b2e;
+  --light: #1a2744;
+  --hover: #243352;
+  --text: #f1f5f9;
+  --gray: #94a3b8;
+  --green: #10b981;
+  --yellow: #f59e0b;
+  --red: #ef4444;
+  --blue: #3b82f6;
+  --navy: #0c2340;
+  --border: #334155;
+  --radius: 10px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  overflow-x: hidden;
+}
+.app { display: flex; flex-direction: column; min-height: 100vh; }
+
+/* Header */
+.header {
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.header h1 { font-size: 20px; font-weight: 700; }
+.header h1 span { color: var(--blue); }
+.header .status-bar { display: flex; gap: 16px; align-items: center; font-size: 13px; }
+.status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+.dot-green { background: var(--green); }
+.dot-red { background: var(--red); }
+.dot-gray { background: var(--gray); }
+
+/* Main layout — ECG on top, content below */
+.main { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+.ecg-section { width: 100%; }
+.bottom-section { display: flex; gap: 8px; flex: 1; min-height: 0; }
+.bottom-left { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.bottom-right { width: 420px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+
+/* Cards */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.card-title {
+  background: var(--light);
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+.card-body { padding: 12px 16px; }
+
+/* ECG Canvas — fixed medical display */
+.ecg-card { display: flex; flex-direction: column; }
+.ecg-card .card-body { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.ecg-display {
+  background: #fff5f7;
+  border-radius: 6px;
+  padding: 4px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+}
+#ecgCanvas {
+  display: block;
+  background: #fff5f7;
+  border-radius: 4px;
+  width: 1000px !important;
+  height: 160px !important;
+  max-width: 1000px !important;
+  max-height: 160px !important;
+  flex-shrink: 0;
+  flex-grow: 0;
+  flex-basis: 1000px;
+}
+.ecg-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ecg-label {
+  font-size: 11px; color: var(--gray);
+  display: flex; gap: 12px; align-items: center;
+}
+.ecg-label .lead { color: var(--text); font-weight: 600; }
+
+/* COM port selector */
+.com-bar {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--light); border-radius: 8px; padding: 6px 10px;
+}
+.com-bar select {
+  padding: 5px 8px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 4px; color: var(--text); font-size: 12px; outline: none;
+}
+.com-bar .com-status { font-size: 12px; color: var(--gray); }
+
+/* Buttons */
+.btn {
+  padding: 8px 18px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity .15s;
+}
+.btn:hover { opacity: .85; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn-primary { background: var(--blue); color: #fff; }
+.btn-success { background: var(--green); color: #fff; }
+.btn-warning { background: var(--yellow); color: #000; }
+.btn-danger { background: var(--red); color: #fff; }
+.btn-secondary { background: var(--light); color: var(--text); border: 1px solid var(--border); }
+
+/* Stats grid */
+.stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.stat-tile {
+  background: var(--light);
+  border-radius: 8px;
+  padding: 10px 6px;
+  text-align: center;
+}
+.stat-tile .label { font-size: 11px; color: var(--gray); margin-bottom: 4px; }
+.stat-tile .value { font-size: 18px; font-weight: 700; }
+
+/* Inputs */
+.field { margin-bottom: 10px; }
+.field label { display: block; font-size: 12px; color: var(--gray); margin-bottom: 4px; }
+.field input, .field select {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--light);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+.field input:focus { border-color: var(--blue); }
+
+/* API bar */
+.api-bar {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--light); border-radius: 8px; padding: 8px 12px;
+}
+.api-bar .api-text { flex: 1; font-size: 13px; color: var(--gray); }
+.api-bar .api-text.connected { color: var(--green); }
+.api-bar .api-text.error { color: var(--red); }
+
+/* Collapsible */
+.collapse { display: none; }
+.collapse.open { display: block; }
+
+/* Diagnosis results */
+.results { flex: 1; overflow-y: auto; }
+.result-section {
+  background: var(--light);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.result-section h4 {
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+.result-section .content {
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  color: var(--text);
+  min-height: 60px;
+}
+.overview {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+}
+.overview .badge {
+  display: inline-block;
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.overview .primary { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+.overview .meta { font-size: 12px; color: var(--gray); }
+
+/* Progress */
+.progress-wrap { margin: 8px 0; }
+.progress-bar {
+  height: 6px;
+  background: var(--light);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--blue);
+  width: 0%;
+  transition: width .3s;
+}
+.progress-text { font-size: 12px; color: var(--gray); margin-top: 4px; }
+
+/* Footer */
+.footer {
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  padding: 8px 24px;
+  font-size: 12px;
+  color: var(--gray);
+  display: flex; justify-content: space-between;
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Header -->
+  <div class="header">
+    <h1>ECG AI <span>Diagnosis</span></h1>
+    <div class="status-bar">
+      <span id="connStatus"><span class="status-dot dot-gray"></span>Disconnected</span>
+      <span id="apiStatus"><span class="status-dot dot-gray"></span>API: Not configured</span>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+    <!-- Top: ECG Strip (full width) -->
+    <div class="ecg-section">
+      <div class="card ecg-card">
+        <div class="card-title">Medical ECG Strip
+          <span style="float:right;font-size:12px;color:var(--gray);font-weight:400;">Lead II · 25 mm/s · 10 mm/mV</span>
+        </div>
+        <div class="card-body">
+          <div class="ecg-display">
+            <canvas id="ecgCanvas" width="1000" height="160"></canvas>
+          </div>
+          <div class="ecg-controls">
+            <button class="btn btn-secondary" id="demoBtn" onclick="toggleDemo()">Demo Waveform</button>
+            <button class="btn btn-primary" id="diagnoseBtn" onclick="runDiagnosis()" disabled>Analyze ECG</button>
+            <div class="com-bar">
+              <span class="com-status">COM:</span>
+              <select id="comPortSelect"><option value="">-- Select Port --</option></select>
+              <button class="btn btn-success" id="comConnectBtn" style="padding:4px 12px;font-size:12px;" onclick="toggleSerial()">Connect</button>
+              <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="refreshPorts()">Scan</button>
+              <span id="portCount" style="font-size:11px;color:var(--gray);">--</span>
+            </div>
+            <div class="ecg-label" style="margin-left:auto;">
+              <span class="lead">Lead II</span>
+              <span id="ecgGain">10 mm/mV</span>
+              <span id="ecgSpeed">25 mm/s</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom: Left (stats + diagnosis) | Right (API + patient) -->
+    <div class="bottom-section">
+      <div class="bottom-left">
+        <!-- Stats -->
+        <div class="card">
+          <div class="card-title">Real-time Statistics</div>
+          <div class="card-body">
+            <div class="stats-grid">
+              <div class="stat-tile"><div class="label">HR</div><div class="value" id="statHR" style="color:var(--gray)">--</div></div>
+              <div class="stat-tile"><div class="label">Rhythm</div><div class="value" id="statRhythm" style="font-size:14px;color:var(--gray)">--</div></div>
+              <div class="stat-tile"><div class="label">Quality</div><div class="value" id="statQuality" style="font-size:14px;color:var(--gray)">--</div></div>
+              <div class="stat-tile"><div class="label">Fs</div><div class="value" id="statFs" style="font-size:14px;color:var(--gray)">--</div></div>
+              <div class="stat-tile"><div class="label">P-P</div><div class="value" id="statPP" style="font-size:14px;color:var(--gray)">--</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Diagnosis Results -->
+        <div class="card" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+          <div class="card-title">AI Diagnosis Results</div>
+          <div class="card-body results" style="flex:1;overflow-y:auto;">
+            <div class="progress-wrap" id="progressWrap" style="display:none;">
+              <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+              <div class="progress-text" id="progressText">Starting...</div>
+            </div>
+            <div class="overview" id="overview">
+              <span class="badge" style="background:var(--light);color:var(--gray);">Awaiting analysis</span>
+              <div class="primary" style="color:var(--gray);">Run an ECG analysis to see results.</div>
+              <div class="meta">Start demo waveform or connect hardware, then click Analyze ECG.</div>
+            </div>
+            <div class="result-section"><h4>Key Findings</h4><div class="content" id="findingsText">No findings yet.</div></div>
+            <div class="result-section"><h4>Immediate Actions</h4><div class="content" id="actionsText">No actions yet.</div></div>
+            <div class="result-section"><h4>Follow-up & Lifestyle</h4><div class="content" id="followupText">No guidance yet.</div></div>
+            <div class="result-section"><h4>Clinical Notes</h4><div class="content" id="notesText">No notes yet.</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bottom-right">
+        <!-- API Status -->
+        <div class="card">
+          <div class="card-title">API Connection</div>
+          <div class="card-body">
+            <div class="api-bar">
+              <span class="status-dot dot-gray" id="apiDot"></span>
+              <span class="api-text" id="apiText">API not configured</span>
+              <button class="btn btn-secondary" style="padding:4px 12px;font-size:12px;" onclick="toggleApiSettings()">Settings</button>
+            </div>
+            <div class="collapse" id="apiSettings">
+              <div style="margin-top:10px;">
+                <div class="field"><label>Model Preset</label>
+                  <select id="presetSelect" onchange="onPresetChange()"></select>
+                </div>
+                <div class="field"><label>API Key</label><input type="password" id="apiKeyInput" placeholder="sk-..."></div>
+                <div class="field"><label>API URL</label><input type="text" id="apiUrlInput" placeholder="https://api.example.com/v1/"></div>
+                <div class="field"><label>Model ID</label><input type="text" id="modelIdInput" placeholder="gpt-4o, gemini-pro..."></div>
+                <button class="btn btn-primary" onclick="setupApi()">Connect API</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Patient Info -->
+        <div class="card">
+          <div class="card-title">Patient Information</div>
+          <div class="card-body">
+            <div style="display:flex;gap:10px;">
+              <div class="field" style="flex:1;"><label>Age</label><input type="text" id="ageInput" placeholder="45"></div>
+              <div class="field" style="flex:1;"><label>Gender</label>
+                <select id="genderInput"><option value="">--</option><option>Male</option><option>Female</option><option>Other</option></select>
+              </div>
+            </div>
+            <div class="field"><label>Symptoms</label><input type="text" id="symptomsInput" placeholder="chest pain, shortness of breath"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <span id="footerStatus">Ready</span>
+    <span>ECG AI v3.0 Web</span>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────
+let demoActive = false;
+let serialActive = false;
+let ecgData = [];
+let sampleRate = 500;
+let timeWindow = 10;
+let presets = {};
+let polling = false;
+
+// ── Canvas ECG Renderer ────────────────────────────────────
+const canvas = document.getElementById('ecgCanvas');
+const ctx = canvas.getContext('2d');
+
+// Fixed canvas: 1000x160 logical px, 4px per mm
+const PX_PER_MM = 4;
+const CANVAS_W = 1000;
+const CANVAS_H = 160;
+const PAPER_SPEED = 25; // mm/s
+const GAIN = 10; // mm/mV
+
+function setupCanvas() {
+  canvas.width = CANVAS_W;
+  canvas.height = CANVAS_H;
+  canvas.style.width = CANVAS_W + 'px';
+  canvas.style.height = CANVAS_H + 'px';
+}
+window.addEventListener('resize', setupCanvas);
+setTimeout(setupCanvas, 50);
+
+function drawECG() {
+  const w = CANVAS_W;
+  const h = CANVAS_H;
+  ctx.clearRect(0, 0, w, h);
+
+  // Background — medical ECG paper pink
+  ctx.fillStyle = '#fff5f7';
+  ctx.fillRect(0, 0, w, h);
+
+  // Grid: 1mm minor, 5mm major (fixed PX_PER_MM = 4)
+  const minor = PX_PER_MM;       // 1mm = 4px
+  const major = PX_PER_MM * 5;   // 5mm = 20px
+
+  // Minor grid (1mm squares)
+  ctx.strokeStyle = '#f9c5d1';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  for (let x = 0; x <= w; x += minor) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
+  for (let y = 0; y <= h; y += minor) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
+  ctx.stroke();
+
+  // Major grid (5mm squares)
+  ctx.strokeStyle = '#e8879a';
+  ctx.lineWidth = 0.9;
+  ctx.beginPath();
+  for (let x = 0; x <= w; x += major) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
+  for (let y = 0; y <= h; y += major) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
+  ctx.stroke();
+
+  // Baseline (center of canvas, 0 mV)
+  const baselineY = h / 2;
+
+  // ECG trace
+  if (ecgData.length < 2) {
+    ctx.fillStyle = '#64748b';
+    ctx.font = '12px monospace';
+    ctx.fillText('Awaiting ECG data...', 12, 20);
+    // Draw 1mV calibration pulse placeholder
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(8, baselineY);
+    ctx.lineTo(8, baselineY - GAIN * PX_PER_MM); // 1mV up
+    ctx.lineTo(20, baselineY - GAIN * PX_PER_MM);
+    ctx.lineTo(20, baselineY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '9px monospace';
+    ctx.fillText('1mV', 24, baselineY - GAIN * PX_PER_MM + 4);
+    return;
+  }
+
+  // Fixed medical scaling: 1 mV = GAIN mm = GAIN * PX_PER_MM pixels
+  // Data is in mV, so y = baselineY - (mV * GAIN * PX_PER_MM)
+  // Auto-detect amplitude to center the trace
+  let minV = Infinity, maxV = -Infinity;
+  for (const v of ecgData) { if (v < minV) minV = v; if (v > maxV) maxV = v; }
+  const ptp = maxV - minV || 1;
+  // Check if data fits in canvas with fixed gain
+  const ptpPx = ptp * GAIN * PX_PER_MM;
+  let effectiveGain = GAIN;
+  if (ptpPx > h * 0.85) {
+    // Auto-reduce gain if signal too tall
+    effectiveGain = (h * 0.85) / (ptp * PX_PER_MM);
+  }
+  const center = (maxV + minV) / 2;
+  // Center the signal on baseline
+  const yOffset = baselineY - center * effectiveGain * PX_PER_MM;
+
+  ctx.strokeStyle = '#0c2340';
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+
+  const n = ecgData.length;
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * w;
+    const y = yOffset + ecgData[i] * effectiveGain * PX_PER_MM * -1;
+    // Wait: y should be baselineY - (value * gain * pxPerMm)
+    const yCorrect = baselineY - (ecgData[i] - center) * effectiveGain * PX_PER_MM;
+    if (i === 0) ctx.moveTo(x, yCorrect);
+    else ctx.lineTo(x, yCorrect);
+  }
+  ctx.stroke();
+
+  // 1mV calibration pulse (top-left corner)
+  const calX = 6, calW = 12;
+  const calH = effectiveGain * PX_PER_MM; // 1mV in pixels
+  ctx.strokeStyle = '#0c2340';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(calX, baselineY);
+  ctx.lineTo(calX, baselineY - calH);
+  ctx.lineTo(calX + calW, baselineY - calH);
+  ctx.lineTo(calX + calW, baselineY);
+  ctx.stroke();
+  ctx.fillStyle = '#64748b';
+  ctx.font = '8px monospace';
+  ctx.fillText('1mV', calX + calW + 3, baselineY - calH + 4);
+
+  // Metric overlay (top-right)
+  const m = lastMetrics;
+  if (m && m.heart_rate_bpm) {
+    const lines = [
+      `HR  ${m.heart_rate_bpm.toFixed(0)} bpm`,
+      `Rhythm  ${(m.rhythm_label || '--').substring(0, 14)}`,
+      `Quality ${(m.signal_quality_label || '--').substring(0, 12)}`,
+      `PP  ${((m.peak_to_peak_mv) || 0).toFixed(2)} mV`,
+      `Fs  ${(m.sample_rate_hz || sampleRate).toFixed(0)} Hz`,
+    ];
+    const boxW = 130, boxH = lines.length * 11 + 6;
+    const boxX = w - boxW - 6, boxY = 4;
+    ctx.fillStyle = 'rgba(255,252,253,0.92)';
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(boxX, boxY, boxW, boxH);
+    ctx.fillStyle = '#1e293b';
+    ctx.font = '8px monospace';
+    lines.forEach((line, i) => ctx.fillText(line, boxX + 4, boxY + 12 + i * 11));
+  }
+
+  // Lead label (bottom-left)
+  ctx.fillStyle = '#64748b';
+  ctx.font = '9px monospace';
+  ctx.fillText('Lead II', 6, h - 6);
+}
+
+let lastMetrics = {};
+
+// ── Polling ────────────────────────────────────────────────
+async function pollECG() {
+  if (polling) return;
+  polling = true;
+  try {
+    const res = await fetch('/api/ecg/stream');
+    const d = await res.json();
+    ecgData = d.data || [];
+    sampleRate = d.sample_rate || sampleRate;
+    timeWindow = d.time_window || timeWindow;
+    lastMetrics = d.metrics || {};
+    demoActive = d.demo_mode;
+    // Auto-detect serial watchdog disconnect
+    if (!d.serial_connected && serialActive) {
+      serialActive = false;
+      const comBtn = document.getElementById('comConnectBtn');
+      comBtn.textContent = 'Connect';
+      comBtn.className = 'btn btn-success';
+      comBtn.style.padding = '4px 12px'; comBtn.style.fontSize = '12px';
+      if (d.serial_error) {
+        document.getElementById('connStatus').innerHTML = '<span class="status-dot dot-red"></span>' + d.serial_error;
+        document.getElementById('footerStatus').textContent = d.serial_error;
+      } else {
+        document.getElementById('connStatus').innerHTML = '<span class="status-dot dot-gray"></span>Disconnected';
+      }
+      document.getElementById('diagnoseBtn').disabled = !demoActive;
+    }
+    updateStats(d.metrics || {});
+    drawECG();
+  } catch (e) { /* ignore */ }
+  polling = false;
+}
+
+function updateStats(m) {
+  const hr = m.heart_rate_bpm;
+  const hrEl = document.getElementById('statHR');
+  hrEl.textContent = hr ? hr.toFixed(0) + ' BPM' : '--';
+  hrEl.style.color = hr ? (hr >= 60 && hr <= 100 ? 'var(--green)' : hr >= 50 && hr <= 110 ? 'var(--yellow)' : 'var(--red)') : 'var(--gray)';
+  document.getElementById('statRhythm').textContent = m.rhythm_label || '--';
+  document.getElementById('statQuality').textContent = m.signal_quality_label || '--';
+  document.getElementById('statFs').textContent = (m.sample_rate_hz || sampleRate).toFixed(0) + ' Hz';
+  document.getElementById('statPP').textContent = m.peak_to_peak_mv ? m.peak_to_peak_mv.toFixed(2) + ' mV' : '--';
+}
+
+setInterval(pollECG, 500);
+
+// ── Serial / COM Port ─────────────────────────────────────
+async function refreshPorts() {
+  try {
+    const res = await fetch('/api/serial/ports');
+    const d = await res.json();
+    const sel = document.getElementById('comPortSelect');
+    const prev = sel.value;
+    const ports = d.ports || [];
+    sel.innerHTML = '<option value="">-- Select Port (' + ports.length + ' found) --</option>';
+    for (const p of ports) {
+      const opt = document.createElement('option');
+      opt.value = p.device;
+      const desc = p.description || p.product || p.manufacturer || '';
+      opt.textContent = desc ? (p.device + ' — ' + desc) : p.device;
+      sel.appendChild(opt);
+    }
+    if (prev) sel.value = prev;
+    document.getElementById('portCount').textContent = ports.length + ' port(s) detected';
+  } catch (e) { console.error('refreshPorts failed:', e); }
+}
+
+async function toggleSerial() {
+  const sel = document.getElementById('comPortSelect');
+  const btn = document.getElementById('comConnectBtn');
+  if (serialActive) {
+    await fetch('/api/serial/disconnect', { method: 'POST' });
+    serialActive = false;
+    btn.textContent = 'Connect';
+    btn.className = 'btn btn-success';
+    btn.style.padding = '4px 12px'; btn.style.fontSize = '12px';
+    document.getElementById('connStatus').innerHTML = '<span class="status-dot dot-gray"></span>Disconnected';
+    document.getElementById('diagnoseBtn').disabled = !demoActive;
+  } else {
+    const port = sel.value;
+    if (!port) { alert('Please select a COM port first'); return; }
+    try {
+      const res = await fetch('/api/serial/connect', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ port })
+      });
+      const d = await res.json();
+      if (d.status === 'connected') {
+        serialActive = true;
+        btn.textContent = 'Disconnect';
+        btn.className = 'btn btn-danger';
+        btn.style.padding = '4px 12px'; btn.style.fontSize = '12px';
+        document.getElementById('connStatus').innerHTML = '<span class="status-dot dot-green"></span>Connected: ' + port;
+        document.getElementById('diagnoseBtn').disabled = false;
+        document.getElementById('footerStatus').textContent = 'Hardware connected on ' + port;
+      } else {
+        alert('Failed to connect to ' + port);
+      }
+    } catch (e) { alert('Connection error: ' + e.message); }
+  }
+}
+
+// ── Demo ───────────────────────────────────────────────────
+async function toggleDemo() {
+  const btn = document.getElementById('demoBtn');
+  if (demoActive) {
+    await fetch('/api/demo/stop', { method: 'POST' });
+    demoActive = false;
+    btn.textContent = 'Demo Waveform';
+    btn.className = 'btn btn-secondary';
+    if (!serialActive) {
+      document.getElementById('connStatus').innerHTML = '<span class="status-dot dot-gray"></span>Disconnected';
+      document.getElementById('diagnoseBtn').disabled = true;
+    }
+  } else {
+    if (serialActive) {
+      await fetch('/api/serial/disconnect', { method: 'POST' });
+      serialActive = false;
+      const comBtn = document.getElementById('comConnectBtn');
+      comBtn.textContent = 'Connect';
+      comBtn.className = 'btn btn-success';
+      comBtn.style.padding = '4px 12px'; comBtn.style.fontSize = '12px';
+    }
+    await fetch('/api/demo/start', { method: 'POST' });
+    demoActive = true;
+    btn.textContent = 'Stop Demo';
+    btn.className = 'btn btn-warning';
+    document.getElementById('connStatus').innerHTML = '<span class="status-dot dot-green"></span>Demo Mode';
+    document.getElementById('diagnoseBtn').disabled = false;
+    document.getElementById('footerStatus').textContent = 'Demo mode — synthetic ECG';
+  }
+}
+
+// ── API Settings ───────────────────────────────────────────
+function toggleApiSettings() {
+  const el = document.getElementById('apiSettings');
+  el.classList.toggle('open');
+}
+
+function onPresetChange() {
+  const sel = document.getElementById('presetSelect');
+  const name = sel.value;
+  if (name === 'Custom / Local') return;
+  const p = presets[name];
+  if (p) {
+    document.getElementById('apiUrlInput').value = p.api_url || '';
+    document.getElementById('modelIdInput').value = p.model_id || '';
+  }
+}
+
+async function setupApi() {
+  const apiKey = document.getElementById('apiKeyInput').value.trim();
+  const apiUrl = document.getElementById('apiUrlInput').value.trim();
+  const modelId = document.getElementById('modelIdInput').value.trim();
+  if (!apiKey || !apiUrl || !modelId) { alert('Please fill all fields'); return; }
+  try {
+    const res = await fetch('/api/setup', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey, api_url: apiUrl, model_id: modelId })
+    });
+    const d = await res.json();
+    if (d.status === 'connected') {
+      document.getElementById('apiDot').className = 'status-dot dot-green';
+      document.getElementById('apiText').textContent = 'API connected — ready for AI diagnosis';
+      document.getElementById('apiText').className = 'api-text connected';
+      document.getElementById('apiStatus').innerHTML = '<span class="status-dot dot-green"></span>API: Connected';
+      if (demoActive || ecgData.length > 100) document.getElementById('diagnoseBtn').disabled = false;
+    } else {
+      document.getElementById('apiDot').className = 'status-dot dot-red';
+      document.getElementById('apiText').textContent = 'API error: ' + (d.message || 'unknown');
+      document.getElementById('apiText').className = 'api-text error';
+    }
+  } catch (e) {
+    alert('Connection failed: ' + e.message);
+  }
+}
+
+// ── Diagnosis ──────────────────────────────────────────────
+async function runDiagnosis() {
+  const btn = document.getElementById('diagnoseBtn');
+  btn.disabled = true;
+  btn.textContent = 'Analyzing...';
+
+  const progressWrap = document.getElementById('progressWrap');
+  const progressFill = document.getElementById('progressFill');
+  const progressText = document.getElementById('progressText');
+  progressWrap.style.display = 'block';
+
+  const steps = [
+    [10, 'Extracting ECG features...'],
+    [25, 'Detecting R-peaks & QRS morphology...'],
+    [40, 'Computing HRV & rhythm metrics...'],
+    [60, 'Sending data to AI model...'],
+    [75, 'AI analyzing cardiac patterns...'],
+    [90, 'Generating clinical report...'],
+  ];
+  let stepIdx = 0;
+  const stepTimer = setInterval(() => {
+    if (stepIdx >= steps.length) { clearInterval(stepTimer); return; }
+    const [pct, msg] = steps[stepIdx];
+    progressFill.style.width = pct + '%';
+    progressText.textContent = msg;
+    document.getElementById('overview').querySelector('.primary').textContent = msg;
+    stepIdx++;
+  }, 600);
+
+  const patientInfo = {};
+  const age = document.getElementById('ageInput').value.trim();
+  if (age) patientInfo.age = parseInt(age);
+  const gender = document.getElementById('genderInput').value;
+  if (gender) patientInfo.gender = gender.toLowerCase();
+  const symptoms = document.getElementById('symptomsInput').value.trim();
+  if (symptoms) patientInfo.symptoms = symptoms;
+
+  try {
+    const res = await fetch('/api/diagnosis/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ patient_info: patientInfo || null })
+    });
+    const d = await res.json();
+    clearInterval(stepTimer);
+    progressFill.style.width = '100%';
+    progressText.textContent = 'Diagnosis complete!';
+    setTimeout(() => { progressWrap.style.display = 'none'; }, 1500);
+
+    if (d.error) {
+      document.getElementById('overview').innerHTML =
+        `<span class="badge" style="background:var(--red);color:#fff;">Error</span>
+         <div class="primary" style="color:var(--red);">${d.error}</div>`;
+    } else {
+      displayDiagnosis(d);
+    }
+  } catch (e) {
+    clearInterval(stepTimer);
+    progressWrap.style.display = 'none';
+    alert('Diagnosis failed: ' + e.message);
+  }
+  btn.disabled = false;
+  btn.textContent = 'Analyze ECG';
+}
+
+function displayDiagnosis(d) {
+  const sev = d.severity || 'unknown';
+  const sevColors = { normal: 'var(--green)', abnormal: 'var(--yellow)', critical: 'var(--red)', low: 'var(--green)' };
+  const conf = d.confidence ? (d.confidence * 100).toFixed(0) : '--';
+  document.getElementById('overview').innerHTML = `
+    <span class="badge" style="background:${sevColors[sev] || 'var(--gray)'};color:#fff;">${sev.toUpperCase()}</span>
+    <span style="float:right;font-size:12px;color:var(--gray);">Confidence ${conf}%</span>
+    <div class="primary">${d.primary_diagnosis || 'Unknown'}</div>
+    <div class="meta">${(d.timestamp || '').substring(0,19).replace('T',' ')} | ${d.model_used || 'AI'}</div>`;
+
+  const findings = (d.key_findings || []).map(f => '• ' + f).join('\n') || 'No findings.';
+  document.getElementById('findingsText').textContent = findings;
+
+  const rec = d.recommendations || {};
+  const actions = (rec.immediate_actions || []).map(a => '• ' + a).join('\n') || 'No actions.';
+  document.getElementById('actionsText').textContent = actions;
+
+  const followUp = [...(rec.follow_up || []), ...(rec.lifestyle || [])].map(f => '• ' + f).join('\n') || 'No guidance.';
+  document.getElementById('followupText').textContent = followUp;
+
+  const notes = [];
+  if (d.secondary_conditions?.length) notes.push('Secondary:\n' + d.secondary_conditions.map(s => '• ' + s).join('\n'));
+  if (d.normal_ranges_comparison) {
+    notes.push('Normal ranges comparison:');
+    for (const [k,v] of Object.entries(d.normal_ranges_comparison)) notes.push(`• ${k.replace(/_/g,' ')}: ${v}`);
+  }
+  if (d.risk_factors?.length) notes.push('Risk factors:\n' + d.risk_factors.map(r => '• ' + r).join('\n'));
+  if (d.prognosis) notes.push('Prognosis: ' + d.prognosis);
+  if (d.clinical_disclaimer) notes.push('\n' + d.clinical_disclaimer);
+  document.getElementById('notesText').textContent = notes.join('\n\n') || 'No notes.';
+
+  document.getElementById('footerStatus').textContent = `Last diagnosis: ${sev} (${conf}%)`;
+}
+
+// ── Init ───────────────────────────────────────────────────
+async function init() {
+  try {
+    const res = await fetch('/api/config');
+    const d = await res.json();
+    presets = d.presets || {};
+    const sel = document.getElementById('presetSelect');
+    sel.innerHTML = '';
+    for (const name of Object.keys(presets)) {
+      const opt = document.createElement('option');
+      opt.value = name; opt.textContent = name;
+      sel.appendChild(opt);
+    }
+    if (d.api_key) document.getElementById('apiKeyInput').value = d.api_key;
+    if (d.api_url) document.getElementById('apiUrlInput').value = d.api_url;
+    if (d.model_id) document.getElementById('modelIdInput').value = d.model_id;
+    sel.value = 'Custom / Local';
+
+    // Auto-connected from .env?
+    if (d.api_key && d.api_url && d.model_id) {
+      document.getElementById('apiDot').className = 'status-dot dot-green';
+      document.getElementById('apiText').textContent = 'API connected — ready for AI diagnosis';
+      document.getElementById('apiText').className = 'api-text connected';
+      document.getElementById('apiStatus').innerHTML = '<span class="status-dot dot-green"></span>API: Connected';
+    }
+  } catch (e) { console.error('Init failed:', e); }
+}
+init();
+refreshPorts();
+</script>
+</body>
+</html>
