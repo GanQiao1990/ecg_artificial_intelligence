@@ -7,6 +7,7 @@ Run: python web_app.py  →  open http://localhost:5000
 
 import os
 import sys
+import argparse
 import threading
 import time
 import json
@@ -391,6 +392,11 @@ def diagnosis_history():
     return jsonify({"history": state.diagnosis_history[-20:]})
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="ECG AI Diagnosis Web App")
+    parser.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=5000, help="Port (default: 5000)")
+    args = parser.parse_args()
+
     # Auto-connect from .env if available
     cfg = get_api_config()
     if cfg.get("api_key") and cfg.get("api_url") and cfg.get("model_id"):
@@ -402,7 +408,7 @@ if __name__ == "__main__":
 
     print("\n" + "=" * 50)
     print("  ECG AI Diagnosis Web App")
-    print("  Open: http://localhost:5000")
+    print(f"  Open: http://{args.host}:{args.port}")
     print("=" * 50 + "\n")
 
-    app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
+    app.run(host=args.host, port=args.port, debug=False, threaded=True)
