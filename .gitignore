@@ -43,3 +43,6 @@ data/config/app_settings.json
 # System specific
 .DS_Store
 Thumbs.db
+
+# Patient measurement exports (may contain real ECG data)
+data/**/*.csv

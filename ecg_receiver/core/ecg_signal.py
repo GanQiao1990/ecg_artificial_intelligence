@@ -200,6 +200,82 @@ def _remove_baseline(data: np.ndarray, sample_rate: float) -> np.ndarray:
     return data.astype(np.float64) - baseline
 
 
+def filter_ecg_band(
+    data_uv: np.ndarray,
+    sample_rate: float,
+    low_hz: float = 0.5,
+    high_hz: float = 40.0,
+    notch_hz: Optional[float] = None,
+) -> np.ndarray:
+    """
+    Clean ECG band via FFT mask: bandpass [low_hz, high_hz] plus an optional
+    narrow mains notch. Reflect-padded to avoid FFT wrap-around edge artifacts.
+    """
+    n = data_uv.size
+    if n < 64:
+        return data_uv.astype(np.float64).copy()
+
+    pad = min(n // 4, int(sample_rate))
+    if pad >= 8:
+        ext = np.concatenate(
+            [data_uv[pad:0:-1], data_uv, data_uv[-2 : -pad - 2 : -1]]
+        )
+    else:
+        ext = data_uv.astype(np.float64)
+        pad = 0
+
+    centered = ext.astype(np.float64) - float(np.mean(ext))
+    spec = np.fft.rfft(centered)
+    freqs = np.fft.rfftfreq(ext.size, d=1.0 / sample_rate)
+    spec[(freqs < low_hz) | (freqs > high_hz)] = 0.0
+    if notch_hz:
+        spec[np.abs(freqs - notch_hz) <= 1.0] = 0.0
+    out = np.fft.irfft(spec, ext.size)
+    return out[pad : pad + n] if pad else out
+
+
+def detect_mains_interference(data_uv: np.ndarray, sample_rate: float) -> Optional[float]:
+    """
+    Return 50.0/60.0 when a narrowband mains spike dominates the spectrum,
+    else None. Compares each mains bin against neighbouring spectral median.
+    """
+    n = data_uv.size
+    if n < int(sample_rate * 4):
+        return None
+    centered = data_uv.astype(np.float64) - float(np.mean(data_uv))
+    power = np.abs(np.fft.rfft(centered)) ** 2
+    freqs = np.fft.rfftfreq(n, d=1.0 / sample_rate)
+    df = float(freqs[1] - freqs[0]) if freqs.size > 1 else 1.0
+    if df <= 0:
+        return None
+    for hz in (50.0, 60.0):
+        i = int(round(hz / df))
+        if i < 9 or i + 9 >= power.size:
+            continue
+        peak = float(power[i - 1 : i + 2].max())
+        neigh = float(
+            np.median(np.concatenate([power[i - 8 : i - 3], power[i + 4 : i + 9]]))
+        )
+        if neigh > 0 and peak > 6.0 * neigh:
+            return hz
+    return None
+
+
+def hf_noise_ratio(data_uv: np.ndarray, sample_rate: float, cutoff_hz: float = 40.0) -> float:
+    """Fraction of spectral power above cutoff_hz (EMG/mains/hf artifact share)."""
+    n = data_uv.size
+    if n < 64:
+        return 0.0
+    centered = data_uv.astype(np.float64) - float(np.mean(data_uv))
+    power = np.abs(np.fft.rfft(centered)) ** 2
+    freqs = np.fft.rfftfreq(n, d=1.0 / sample_rate)
+    band = (freqs > 0.5) & (freqs <= sample_rate / 2.0)
+    total = float(power[band].sum())
+    if total <= 0:
+        return 0.0
+    return float(power[freqs > cutoff_hz].sum() / total)
+
+
 def detect_r_peaks(data: np.ndarray, sample_rate: float) -> List[int]:
     """
     R-peak detection with baseline removal, polarity handling, and refractory NMS.
@@ -249,6 +325,133 @@ def detect_r_peaks(data: np.ndarray, sample_rate: float) -> List[int]:
 
     peaks.sort()
     return peaks
+
+
+def _envelope_short_period(
+    envelope: np.ndarray,
+    sample_rate: float,
+    lo_sec: float = 0.12,
+    hi_sec: float = 0.75,
+    min_corr: float = 0.10,
+) -> Optional[float]:
+    """
+    First major autocorrelation peak of the |signal| envelope within [lo, hi] s.
+
+    Detects a fast periodic train (e.g. artifact spikes) that the refractory
+    NMS may be undersampling at ~half rate. Returns lag in seconds or None.
+    """
+    env = envelope.astype(np.float64) - float(np.mean(envelope))
+    if env.size < int(hi_sec * sample_rate) + 2:
+        return None
+    ac = np.correlate(env, env, "full")[env.size - 1 :]
+    if ac.size == 0 or ac[0] <= 0:
+        return None
+    ac = ac / ac[0]
+    lo = int(lo_sec * sample_rate)
+    hi = min(int(hi_sec * sample_rate), ac.size - 2)
+    for i in range(lo, hi):
+        if ac[i] >= ac[i - 1] and ac[i] > ac[i + 1] and ac[i] > min_corr:
+            y0, y1, y2 = ac[i - 1], ac[i], ac[i + 1]
+            denom = y0 - 2.0 * y1 + y2
+            delta = 0.5 * (y0 - y2) / denom if denom != 0 else 0.0
+            return float(i + delta) / sample_rate
+    return None
+
+
+def _slow_component_rate(
+    data_uv: np.ndarray,
+    sample_rate: float,
+) -> Tuple[Optional[float], Optional[float], List[int]]:
+    """
+    Cardiac-rate estimate from the <3 Hz component (P/T-wave repetition rate).
+
+    Robust when sharp high-frequency artifacts dominate the QRS band: the
+    artifact spikes live above ~3 Hz while the cardiac cycle repeats at ~1 Hz.
+    Returns (bpm, rr_cv, peak_indices) or (None, None, []).
+    """
+    n = data_uv.size
+    if n < int(sample_rate * 3):
+        return None, None, []
+
+    centered = data_uv.astype(np.float64) - float(np.mean(data_uv))
+    spec = np.fft.rfft(centered)
+    freqs = np.fft.rfftfreq(n, d=1.0 / sample_rate)
+    spec[freqs > 3.0] = 0.0
+    slow = np.fft.irfft(spec, n)
+
+    # Light smoothing suppresses residual ripple from the brick-wall cutoff
+    w = max(3, int(sample_rate * 0.12))
+    if w % 2 == 0:
+        w += 1
+    slow = np.convolve(slow, np.ones(w, dtype=np.float64) / w, mode="same")
+
+    p55 = float(np.percentile(slow, 55))
+    p95 = float(np.percentile(slow, 95))
+    threshold = p55 + 0.35 * (p95 - p55)
+    min_dist = int(0.5 * sample_rate)
+
+    candidates = [
+        i
+        for i in range(1, n - 1)
+        if slow[i] >= threshold and slow[i] >= slow[i - 1] and slow[i] > slow[i + 1]
+    ]
+    candidates.sort(key=lambda i: float(slow[i]), reverse=True)
+
+    blocked = np.zeros(n, dtype=bool)
+    peaks: List[int] = []
+    for i in candidates:
+        if blocked[i]:
+            continue
+        peaks.append(i)
+        blocked[max(0, i - min_dist) : i + min_dist + 1] = True
+    peaks.sort()
+
+    if len(peaks) < 4:
+        return None, None, peaks
+
+    rr = np.diff(np.asarray(peaks, dtype=np.float64)) / sample_rate
+    valid = rr[(rr >= RR_MIN_SEC) & (rr <= RR_MAX_SEC)]
+    if valid.size < 3:
+        return None, None, peaks
+
+    median_rr = float(np.median(valid))
+    if median_rr <= 0:
+        return None, None, peaks
+
+    bpm = max(HR_MIN_BPM, min(HR_MAX_BPM, 60.0 / median_rr))
+    cv = float(np.std(valid) / np.mean(valid)) if valid.size >= 2 else 0.0
+    return bpm, cv, peaks
+
+
+def _broad_peak_fraction(
+    envelope: np.ndarray,
+    peaks: List[int],
+    sample_rate: float,
+    width_sec: float = 0.08,
+) -> float:
+    """
+    Fraction of detected peaks whose envelope excursion is wider than width_sec.
+
+    QRS complexes are narrow (~20-60 ms); T-waves mistaken for beats are broad
+    (~90-150 ms). A roughly half-broad population indicates T-wave
+    double-counting rather than a uniformly wide-QRS rhythm.
+    """
+    if len(peaks) < 4:
+        return 0.0
+    broad = 0
+    for p in peaks:
+        half = 0.5 * float(envelope[p])
+        if half <= 0:
+            continue
+        lo = p
+        while lo > 0 and envelope[lo] >= half:
+            lo -= 1
+        hi = p
+        while hi < envelope.size - 1 and envelope[hi] >= half:
+            hi += 1
+        if (hi - lo) / sample_rate > width_sec:
+            broad += 1
+    return broad / len(peaks)
 
 
 def heart_rate_from_peaks(peaks: List[int], sample_rate: float) -> Tuple[Optional[float], Optional[float]]:
@@ -314,6 +517,26 @@ def rhythm_from_cv(cv: Optional[float]) -> Tuple[str, str]:
     return "Irregular", "red"
 
 
+def hr_zone(bpm: Optional[float]) -> Tuple[str, str, str, bool]:
+    """
+    Clinical resting-HR zone for an adult tracing.
+    Returns (zone_key, chinese_label, severity_token, is_abnormal).
+    """
+    if bpm is None:
+        return "unknown", "未知", "gray", False
+    if bpm < 50.0:
+        return "bradycardia", "严重心动过缓", "red", True
+    if bpm < 60.0:
+        return "relative_bradycardia", "心动过缓(偏低)", "yellow", True
+    if bpm <= 100.0:
+        return "normal", "正常范围", "green", False
+    if bpm <= 120.0:
+        return "mild_tachycardia", "窦性心动过速可能", "yellow", True
+    if bpm <= 150.0:
+        return "tachycardia", "心动过速", "red", True
+    return "severe_tachycardia", "严重心动过速", "red", True
+
+
 def compute_ecg_metrics(
     data: np.ndarray,
     sample_rate: float,
@@ -327,6 +550,13 @@ def compute_ecg_metrics(
     scale = max(float(uv_per_count), 1e-12)
     arr_uv = arr * scale
     rate_correction_note: Optional[str] = None
+
+    # Clean ECG band: 0.5-40 Hz bandpass with automatic 50/60 Hz mains notch.
+    # Peak detection and rate estimation run on this filtered trace so
+    # baseline wander, EMG and mains hum do not corrupt beat picking.
+    mains_hz = detect_mains_interference(arr_uv, sample_rate)
+    filtered_uv = filter_ecg_band(arr_uv, sample_rate, notch_hz=mains_hz)
+    hf_ratio = hf_noise_ratio(arr_uv, sample_rate)
 
     if arr.size == 0:
         return {
@@ -347,10 +577,17 @@ def compute_ecg_metrics(
             "sample_rate_hz": sample_rate,
             "computed_hr_bpm": None,
             "device_hr_bpm": device_hr_bpm,
+            "heart_rate_method": "none",
+            "heart_rate_zone": "unknown",
+            "heart_rate_zone_label": "未知",
+            "heart_rate_abnormal": False,
+            "mains_interference_hz": None,
+            "hf_noise_ratio": 0.0,
         }
 
-    # R-peak detection uses shape (counts); amplitude QC uses µV
-    peaks = detect_r_peaks(arr, sample_rate)
+    # R-peak detection runs on the filtered (clean-band) trace; amplitude QC
+    # still uses the raw µV signal.
+    peaks = detect_r_peaks(filtered_uv, sample_rate)
     computed_bpm, rr_cv = heart_rate_from_peaks(peaks, sample_rate)
 
     if auto_correct_rate and device_hr_bpm is not None:
@@ -359,12 +596,47 @@ def compute_ecg_metrics(
         )
         if reason and corrected_rate != sample_rate:
             sample_rate = corrected_rate
-            peaks = detect_r_peaks(arr, sample_rate)
+            peaks = detect_r_peaks(filtered_uv, sample_rate)
             computed_bpm, rr_cv = heart_rate_from_peaks(peaks, sample_rate)
             rate_correction_note = reason
 
     final_bpm, hr_source = resolve_heart_rate(computed_bpm, device_hr_bpm, peaks)
     rhythm_label, rhythm_token = rhythm_from_cv(rr_cv)
+    rate_method = "qrs_peaks"
+    harmonic_corrected = False
+
+    # Overcount guard: two artifact signatures both make the peak detector
+    # report ~2x the true rate —
+    #   (a) harmonic: the envelope holds a faster periodic train (~half the
+    #       detected RR) that refractory NMS undersamples (motion/tremor spikes);
+    #   (b) t_wave_alt: ~half the detected peaks are broad (T-waves counted as
+    #       beats because they land just outside the refractory window).
+    # In either case the <3 Hz cardiac component gives the trustworthy rate.
+    if computed_bpm and arr.size >= int(sample_rate * 3):
+        median_rr = 60.0 / computed_bpm
+        envelope = np.abs(_remove_baseline(filtered_uv, sample_rate))
+        short_period = _envelope_short_period(envelope, sample_rate)
+        harmonic_env = bool(
+            short_period and 1.7 <= median_rr / short_period <= 2.5
+        )
+        broad_frac = _broad_peak_fraction(envelope, peaks, sample_rate)
+        t_wave_alt = 0.25 <= broad_frac <= 0.75
+        if harmonic_env or t_wave_alt:
+            slow_bpm, slow_cv, slow_peaks = _slow_component_rate(filtered_uv, sample_rate)
+            if (
+                slow_bpm
+                and 1.5 <= computed_bpm / slow_bpm <= 2.6
+                and abs(computed_bpm - slow_bpm) / ((computed_bpm + slow_bpm) / 2.0) > 0.25
+            ):
+                computed_bpm = slow_bpm
+                rr_cv = slow_cv
+                peaks = slow_peaks
+                rate_method = "slow_component"
+                harmonic_corrected = True
+                final_bpm, hr_source = resolve_heart_rate(
+                    computed_bpm, device_hr_bpm, peaks
+                )
+                rhythm_label, rhythm_token = rhythm_from_cv(rr_cv)
 
     peak_to_peak = float(np.ptp(arr_uv))
     mean = float(np.mean(arr_uv))
@@ -389,9 +661,23 @@ def compute_ecg_metrics(
     else:
         quality_label, quality_token = "Poor", "red"
 
+    # A harmonic-overcount correction means the QRS band is dominated by a
+    # periodic artifact train — the tracing cannot be called clean. Strong
+    # mains interference likewise caps the grade at Fair.
+    if (harmonic_corrected or mains_hz is not None) and quality_token == "green":
+        quality_label, quality_token = "Fair", "yellow"
+
+    hr_zone_key, hr_zone_label, _, hr_abnormal = hr_zone(final_bpm)
+
     return {
         "heart_rate_bpm": final_bpm,
         "heart_rate_source": hr_source,
+        "heart_rate_method": rate_method,
+        "heart_rate_zone": hr_zone_key,
+        "heart_rate_zone_label": hr_zone_label,
+        "heart_rate_abnormal": hr_abnormal,
+        "mains_interference_hz": mains_hz,
+        "hf_noise_ratio": round(hf_ratio, 4),
         "rhythm_label": rhythm_label,
         "rhythm_color_token": rhythm_token,
         "signal_quality_label": quality_label,
@@ -422,9 +708,16 @@ def preprocess_for_llm(
         data, sample_rate, device_hr_bpm, uv_per_count=uv_per_count
     )
     arr = np.asarray(data, dtype=np.float64).flatten()
+    arr_uv = arr * max(float(uv_per_count), 1e-12)
 
-    snippet_len = min(int(sample_rate * 5), arr.size)
-    snippet = arr[-snippet_len:] if snippet_len else arr
+    # Waveform snippet from the clean ECG band (0.5-40 Hz + mains notch)
+    snippet_uv = filter_ecg_band(
+        arr_uv,
+        metrics["sample_rate_hz"],
+        notch_hz=metrics.get("mains_interference_hz"),
+    )
+    snippet_len = min(int(metrics["sample_rate_hz"] * 5), snippet_uv.size)
+    snippet = snippet_uv[-snippet_len:] if snippet_len else snippet_uv
     decimation = max(1, snippet_len // 250)
 
     return {
@@ -435,6 +728,12 @@ def preprocess_for_llm(
         "heart_rate_source": metrics["heart_rate_source"],
         "device_hr_bpm": metrics["device_hr_bpm"],
         "computed_hr_bpm": metrics["computed_hr_bpm"],
+        "heart_rate_method": metrics.get("heart_rate_method", "qrs_peaks"),
+        "heart_rate_zone": metrics.get("heart_rate_zone", "unknown"),
+        "heart_rate_zone_label": metrics.get("heart_rate_zone_label", "未知"),
+        "heart_rate_abnormal": metrics.get("heart_rate_abnormal", False),
+        "mains_interference_hz": metrics.get("mains_interference_hz"),
+        "hf_noise_ratio": metrics.get("hf_noise_ratio", 0.0),
         "qrs_count": metrics["qrs_count"],
         "rhythm_regularity": metrics["rhythm_label"],
         "rr_variability_cv": metrics["rr_variability"],
@@ -444,7 +743,19 @@ def preprocess_for_llm(
         "signal_quality": metrics["signal_quality_label"],
         "waveform_snippet": [round(float(v), 1) for v in snippet[::decimation].tolist()],
         "clinical_note": (
-            "Heart rate uses firmware value when available; otherwise R-peak detection "
+            "Signal band-limited to 0.5-40 Hz"
+            + (
+                f" with {metrics['mains_interference_hz']:.0f} Hz mains notch"
+                if metrics.get("mains_interference_hz")
+                else ""
+            )
+            + ". Heart rate uses firmware value when available; otherwise R-peak detection "
             f"at {metrics['sample_rate_hz']:.0f} Hz with {REFRACTORY_SEC:.2f}s refractory period."
+            + (
+                " Peak-based estimate showed harmonic overcount on a periodic artifact "
+                "train; rate falls back to the <3 Hz cardiac component."
+                if metrics.get("heart_rate_method") == "slow_component"
+                else ""
+            )
         ),
     }

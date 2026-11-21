@@ -500,11 +500,12 @@ function drawECG() {
   if (m && m.heart_rate_bpm) {
     const lines = [
       `HR  ${m.heart_rate_bpm.toFixed(0)} bpm`,
+      m.heart_rate_zone_label ? `Zone  ${m.heart_rate_zone_label}` : null,
       `Rhythm  ${(m.rhythm_label || '--').substring(0, 14)}`,
       `Quality ${(m.signal_quality_label || '--').substring(0, 12)}`,
       `PP  ${((m.peak_to_peak_mv) || 0).toFixed(2)} mV`,
       `Fs  ${(m.sample_rate_hz || sampleRate).toFixed(0)} Hz`,
-    ];
+    ].filter(Boolean);
     const boxW = 130, boxH = lines.length * 11 + 6;
     const boxX = w - boxW - 6, boxY = 4;
     ctx.fillStyle = 'rgba(255,252,253,0.92)';
@@ -621,7 +622,7 @@ async function toggleSerial() {
         document.getElementById('diagnoseBtn').disabled = false;
         document.getElementById('footerStatus').textContent = 'Hardware connected on ' + port;
       } else {
-        alert('Failed to connect to ' + port);
+        alert(d.error || ('Failed to connect to ' + port));
       }
     } catch (e) { alert('Connection error: ' + e.message); }
   }
@@ -751,9 +752,11 @@ async function runDiagnosis() {
     setTimeout(() => { progressWrap.style.display = 'none'; }, 1500);
 
     if (d.error) {
+      const codeBadge = d.error_code ? ` <span style="font-size:11px;color:var(--gray);border:1px solid var(--border);border-radius:4px;padding:1px 6px;margin-left:6px;">${d.error_code}</span>` : '';
+      const detail = d.detail ? `<div class="meta" style="margin-top:6px;font-size:11px;color:var(--gray);word-break:break-all;">${String(d.detail).substring(0, 300)}</div>` : '';
       document.getElementById('overview').innerHTML =
-        `<span class="badge" style="background:var(--red);color:#fff;">Error</span>
-         <div class="primary" style="color:var(--red);">${d.error}</div>`;
+        `<span class="badge" style="background:var(--red);color:#fff;">Error</span>${codeBadge}
+         <div class="primary" style="color:var(--red);">${d.error}</div>${detail}`;
     } else {
       displayDiagnosis(d);
     }

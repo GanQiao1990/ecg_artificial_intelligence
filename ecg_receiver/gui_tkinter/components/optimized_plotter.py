@@ -232,6 +232,8 @@ class OptimizedECGPlotter:
             "qrs_count": raw.get("qrs_count", 0),
             "computed_hr_bpm": raw.get("computed_hr_bpm"),
             "device_hr_bpm": raw.get("device_hr_bpm"),
+            "heart_rate_method": raw.get("heart_rate_method", "qrs_peaks"),
+            "heart_rate_zone_label": raw.get("heart_rate_zone_label", "未知"),
         }
 
     def set_device_heart_rate(self, bpm: Optional[float]) -> None:

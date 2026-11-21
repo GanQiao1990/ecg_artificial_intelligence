@@ -31,7 +31,11 @@ from ecg_receiver.core.ecg_signal import (
     preprocess_for_llm,
     parse_ecg_line,
 )
-from ecg_receiver.core.llm_diagnosis import LLMDiagnosisClient, MODEL_PRESETS
+from ecg_receiver.core.llm_diagnosis import (
+    LLMDiagnosisClient,
+    MODEL_PRESETS,
+    DiagnosisAPIError,
+)
 from ecg_receiver.core.serial_handler import SerialHandler
 
 ensure_data_dirs()
@@ -322,7 +326,7 @@ def setup_api():
         )
         return jsonify({"status": "connected" if ok else "error"})
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({"status": "error", "error": str(e), "message": str(e)}), 500
 
 @app.route("/api/serial/ports")
 def serial_ports():
@@ -335,7 +339,10 @@ def serial_connect():
     if not port:
         return jsonify({"status": "error", "message": "No port specified"}), 400
     ok = state.connect_serial(port)
-    return jsonify({"status": "connected" if ok else "error", "port": port})
+    payload = {"status": "connected" if ok else "error", "port": port}
+    if not ok:
+        payload["error"] = f"无法打开串口 {port}，请检查设备连接与驱动"
+    return jsonify(payload)
 
 @app.route("/api/serial/disconnect", methods=["POST"])
 def serial_disconnect():
@@ -369,6 +376,11 @@ def ecg_stream():
         "metrics": {
             "heart_rate_bpm": metrics.get("heart_rate_bpm"),
             "heart_rate_source": metrics.get("heart_rate_source"),
+            "heart_rate_method": metrics.get("heart_rate_method"),
+            "heart_rate_zone_label": metrics.get("heart_rate_zone_label"),
+            "heart_rate_abnormal": metrics.get("heart_rate_abnormal"),
+            "mains_interference_hz": metrics.get("mains_interference_hz"),
+            "hf_noise_ratio": metrics.get("hf_noise_ratio"),
             "rhythm_label": metrics.get("rhythm_label"),
             "signal_quality_label": metrics.get("signal_quality_label"),
             "peak_to_peak_mv": (metrics.get("peak_to_peak") or 0) / 1000.0,
@@ -377,6 +389,26 @@ def ecg_stream():
         },
     })
 
+_ERROR_HTTP_STATUS = {
+    "bad_request": 400,
+    "auth_failed": 401,
+    "not_found": 404,
+    "conflict": 409,
+    "rate_limited": 429,
+    "timeout": 504,
+    "connect_failed": 502,
+    "network_error": 502,
+    "server_error": 502,
+    "bad_response": 502,
+    "empty_response": 502,
+    "http_error": 502,
+}
+
+
+def _diagnosis_error_json(err: DiagnosisAPIError):
+    return jsonify(err.to_dict()), _ERROR_HTTP_STATUS.get(err.code, 500)
+
+
 @app.route("/api/diagnosis/run", methods=["POST"])
 def run_diagnosis():
     data = request.json or {}
@@ -384,8 +416,16 @@ def run_diagnosis():
     try:
         result = state.run_diagnosis(patient_info)
         return jsonify(result)
+    except DiagnosisAPIError as e:
+        return _diagnosis_error_json(e)
+    except ValueError as e:
+        friendly = {
+            "API not configured": "AI 服务未配置，请先在 API Connection 中连接模型",
+            "Not enough ECG data": "心电数据不足，请等待波形采集约 10 秒后再分析",
+        }.get(str(e), str(e))
+        return jsonify({"error": friendly, "error_code": "bad_input", "severity": "unknown"}), 400
     except Exception as e:
-        return jsonify({"error": str(e), "severity": "unknown"}), 500
+        return jsonify({"error": "诊断服务内部错误", "error_code": "internal", "detail": str(e), "severity": "unknown"}), 500
 
 @app.route("/api/diagnosis/history")
 def diagnosis_history():

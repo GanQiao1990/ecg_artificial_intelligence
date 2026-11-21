@@ -85,6 +85,76 @@ JSON 结构：
 """
 
 
+class DiagnosisAPIError(Exception):
+    """Diagnosis API failure carrying a user-facing message and technical detail.
+
+    `str(err)` returns the Chinese user message so every caller
+    (Flask routes, Tkinter `error_callback(str(e))`) gets the clean
+    form for free; `code` is the machine-readable category and
+    `detail` keeps the raw technical text for logs/debugging.
+    """
+
+    def __init__(self, code: str, user_message: str, detail: str = ""):
+        super().__init__(user_message)
+        self.code = code
+        self.user_message = user_message
+        self.detail = detail
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "error": self.user_message,
+            "error_code": self.code,
+            "detail": self.detail,
+            "severity": "unknown",
+        }
+
+
+_HTTP_ERROR_MAP = {
+    400: ("bad_request", "AI 服务拒绝了请求参数，请检查模型 ID 是否正确"),
+    401: ("auth_failed", "API 密钥无效或已过期，请在 Settings 中检查密钥"),
+    403: ("auth_failed", "API 密钥没有访问权限，请检查账户状态或模型权限"),
+    404: ("not_found", "API 地址或模型不存在，请检查 API URL 与 Model ID"),
+    408: ("timeout", "AI 服务响应超时，请稍后重试"),
+    409: ("conflict", "AI 服务返回冲突错误，请稍后重试"),
+    429: ("rate_limited", "请求过于频繁或额度已用尽，请稍后重试"),
+}
+
+
+def _api_error_text(resp: requests.Response) -> str:
+    """Best-effort extraction of the provider's own error message."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return (resp.text or "")[:300].strip()
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict):
+            msg = err.get("message") or err.get("type") or ""
+            code = err.get("code") or ""
+            return f"{code}: {msg}".strip(": ")[:300] if msg or code else str(err)[:300]
+        if isinstance(err, str):
+            return err[:300]
+        msg = body.get("message")
+        if isinstance(msg, str):
+            return msg[:300]
+    return (resp.text or "")[:300].strip()
+
+
+def _classify_http_error(resp: requests.Response) -> DiagnosisAPIError:
+    status = resp.status_code
+    detail = f"HTTP {status} — {_api_error_text(resp)}"
+    if status in _HTTP_ERROR_MAP:
+        code, msg = _HTTP_ERROR_MAP[status]
+        return DiagnosisAPIError(code, msg, detail)
+    if 500 <= status < 600:
+        return DiagnosisAPIError(
+            "server_error", f"AI 服务内部错误（HTTP {status}），请稍后重试", detail
+        )
+    return DiagnosisAPIError(
+        "http_error", f"AI 服务返回异常状态（HTTP {status}）", detail
+    )
+
+
 class LLMDiagnosisClient:
     """OpenAI-compatible LLM client for ECG diagnosis."""
 
@@ -132,9 +202,19 @@ class LLMDiagnosisClient:
         hr = processed_data.get("heart_rate_bpm")
         hr_src = processed_data.get("heart_rate_source", "unknown")
         fs = processed_data.get("sample_rate_hz")
+        zone_label = processed_data.get("heart_rate_zone_label") or "未知"
+        hr_method = processed_data.get("heart_rate_method", "qrs_peaks")
+        mains = processed_data.get("mains_interference_hz")
+        hf = processed_data.get("hf_noise_ratio")
         user_parts = [
-            "【心电分析摘要】系统已完成采样率校准与 R 峰检测，请直接采用下列心率字段。",
-            f"心率：{hr} BPM（来源：{hr_src}）| 采样率：{fs} Hz | QRS：{processed_data.get('qrs_count')} | 质量：{processed_data.get('signal_quality')}",
+            "【心电分析摘要】系统已完成采样率校准、0.5-40Hz 滤波与 R 峰检测，请直接采用下列心率字段。",
+            (
+                f"心率：{hr} BPM（来源：{hr_src}，方法：{hr_method}，分区：{zone_label}"
+                f"{'，心率异常' if processed_data.get('heart_rate_abnormal') else ''}）"
+                f"| 采样率：{fs} Hz | QRS：{processed_data.get('qrs_count')} | 节律：{processed_data.get('rhythm_regularity')} | 质量：{processed_data.get('signal_quality')}"
+                + (f" | 市电干扰：{mains} Hz" if mains else "")
+                + (f" | 高频噪声占比：{hf}" if hf is not None else "")
+            ),
             json.dumps(processed_data, indent=2, ensure_ascii=False),
         ]
         if patient_info:
@@ -161,16 +241,57 @@ class LLMDiagnosisClient:
             "max_tokens": 2048,
         }
 
-        resp = requests.post(
-            self.api_url,
-            headers=headers,
-            json=payload,
-            timeout=self.timeout,
-        )
-        resp.raise_for_status()
+        try:
+            resp = requests.post(
+                self.api_url,
+                headers=headers,
+                json=payload,
+                timeout=self.timeout,
+            )
+        except requests.Timeout:
+            raise DiagnosisAPIError(
+                "timeout",
+                f"AI 服务响应超时（>{self.timeout} 秒），请检查网络后重试",
+                f"POST {self.api_url} timed out",
+            ) from None
+        except requests.ConnectionError as exc:
+            raise DiagnosisAPIError(
+                "connect_failed",
+                "无法连接 AI 服务，请检查网络连接与 API 地址",
+                str(exc),
+            ) from None
+        except requests.RequestException as exc:
+            raise DiagnosisAPIError(
+                "network_error", "网络请求失败，请检查网络后重试", str(exc)
+            ) from None
 
-        result = resp.json()
-        content = result["choices"][0]["message"]["content"]
+        if resp.status_code != 200:
+            raise _classify_http_error(resp)
+
+        try:
+            result = resp.json()
+        except ValueError:
+            raise DiagnosisAPIError(
+                "bad_response",
+                "AI 服务返回了无法解析的响应（非 JSON）",
+                (resp.text or "")[:300],
+            ) from None
+
+        try:
+            content = result["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            raise DiagnosisAPIError(
+                "bad_response",
+                "AI 服务响应缺少 choices 字段，模型或接口可能不兼容",
+                json.dumps(result, ensure_ascii=False)[:300],
+            ) from None
+
+        if not isinstance(content, str) or not content.strip():
+            raise DiagnosisAPIError(
+                "empty_response",
+                "AI 服务返回了空内容，请重试或更换模型",
+                json.dumps(result, ensure_ascii=False)[:300],
+            )
 
         diagnosis = self._parse_diagnosis(content)
         diagnosis["input_metrics"] = {
