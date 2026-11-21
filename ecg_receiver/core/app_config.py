@@ -110,10 +110,26 @@ def get_api_config() -> Dict[str, str]:
         or os.getenv("OPENAI_MODEL")
         or "gemini-pro"
     ).strip()
+    max_tokens: Optional[int] = None
+    raw_max_tokens = (os.getenv("ECG_LLM_MAX_TOKENS") or "").strip()
+    if raw_max_tokens:
+        try:
+            max_tokens = max(256, int(raw_max_tokens))
+        except ValueError:
+            max_tokens = None
+    timeout_sec: Optional[int] = None
+    raw_timeout = (os.getenv("ECG_LLM_TIMEOUT_SEC") or "").strip()
+    if raw_timeout:
+        try:
+            timeout_sec = max(10, int(raw_timeout))
+        except ValueError:
+            timeout_sec = None
     return {
         "api_key": api_key,
         "api_url": base_url,
         "model_id": model_id,
+        "max_tokens": max_tokens,
+        "timeout_sec": timeout_sec,
     }
 
 

@@ -27,6 +27,7 @@ from ecg_receiver.core.app_config import ensure_data_dirs, load_env, get_api_con
 from ecg_receiver.core.ecg_demo import fill_demo_buffer, generate_medical_demo_chunk
 from ecg_receiver.core.ecg_signal import (
     DEFAULT_SAMPLE_RATE,
+    SampleRateTracker,
     compute_ecg_metrics,
     preprocess_for_llm,
     parse_ecg_line,
@@ -59,6 +60,13 @@ class ECGStateManager:
         self.demo_phase = 0.0
         self.demo_bpm = 72.0
         self.sample_rate = float(DEFAULT_SAMPLE_RATE)
+        self.sample_rate_mode = (
+            os.getenv("ECG_SAMPLE_RATE_MODE") or "auto"
+        ).strip().lower()
+        if self.sample_rate_mode not in ("auto", "configured"):
+            self.sample_rate_mode = "auto"
+        self.sample_rate_tracker = SampleRateTracker(configured_rate=self.sample_rate)
+        self.last_device_hr_bpm: Optional[float] = None
         self.time_window_sec = 10.0
         self.uv_per_count = 1.0
         self.buffer: deque = deque(maxlen=int(self.sample_rate * (self.time_window_sec + 2)))
@@ -75,6 +83,14 @@ class ECGStateManager:
         self._serial_stop = False
         self._serial_data_received = False
         self.serial_error = ""
+
+    def effective_sample_rate(self) -> float:
+        """Effective stream rate: auto-estimated (timestamps/arrival) in auto
+        mode during live serial capture, else the configured rate."""
+        if self.demo_mode or not self.serial_connected:
+            return self.sample_rate
+        prefer_auto = self.sample_rate_mode == "auto"
+        return self.sample_rate_tracker.effective_rate(prefer_auto=prefer_auto)
 
     def get_recent_mv(self, max_points: int = 0) -> List[float]:
         with self.lock:
@@ -94,9 +110,10 @@ class ECGStateManager:
         if len(data) < 50:
             return {}
         arr = np.asarray(data, dtype=np.float64)
-        device_hr = self.demo_bpm if self.demo_mode else None
+        rate = self.effective_sample_rate()
+        device_hr = self.demo_bpm if self.demo_mode else self.last_device_hr_bpm
         metrics = compute_ecg_metrics(
-            arr, self.sample_rate, device_hr_bpm=device_hr,
+            arr, rate, device_hr_bpm=device_hr,
             uv_per_count=self.uv_per_count,
         )
         self.last_metrics = metrics
@@ -163,6 +180,8 @@ class ECGStateManager:
         self._serial_stop = False
         self._serial_data_received = False
         self.serial_error = ""
+        self.last_device_hr_bpm = None
+        self.sample_rate_tracker = SampleRateTracker(configured_rate=self.sample_rate)
         self.uv_per_count = float(get_api_config().get("uv_per_count", 12.2) or 12.2)
         self.buffer.clear()
         self._serial_thread = threading.Thread(target=self._serial_loop, daemon=True)
@@ -197,20 +216,35 @@ class ECGStateManager:
             if self._serial_stop:
                 return
             parsed = parse_ecg_line(line)
+            if parsed.ecg_value is None and parsed.device_timestamp_ms is None:
+                return
+            # Feed the rate tracker on every received sample/line so auto mode
+            # can estimate the true UART stream rate (timestamps or arrivals).
+            self.sample_rate_tracker.on_sample(parsed.device_timestamp_ms)
+            if parsed.device_hr_bpm is not None:
+                self.last_device_hr_bpm = parsed.device_hr_bpm
             if parsed.ecg_value is not None:
                 self._serial_data_received = True
                 with self.lock:
                     self.buffer.append(float(parsed.ecg_value))
         self.serial_handler.start_reading(callback)
 
-    def setup_api(self, api_key: str, api_url: str, model_id: str) -> bool:
+    def setup_api(
+        self,
+        api_key: str,
+        api_url: str,
+        model_id: str,
+        max_tokens: Optional[int] = None,
+        timeout_sec: Optional[int] = None,
+    ) -> bool:
         try:
             self.diagnosis_client = LLMDiagnosisClient(
                 api_key=api_key,
                 api_url=api_url,
                 model_id=model_id,
-                timeout=60,
+                timeout=timeout_sec or 60,
                 sample_rate=self.sample_rate,
+                max_tokens=max_tokens or 8192,
             )
             self.api_status = "connected"
             return True
@@ -229,7 +263,7 @@ class ECGStateManager:
         if len(data) < 100:
             raise ValueError("Not enough ECG data")
 
-        effective_rate = self.sample_rate
+        effective_rate = self.effective_sample_rate()
         window_samples = int(effective_rate * 10)
         available = min(max(window_samples, 1000), len(data))
         ecg_data = data[-available:]
@@ -323,6 +357,8 @@ def setup_api():
             data.get("api_key", ""),
             data.get("api_url", ""),
             data.get("model_id", ""),
+            max_tokens=data.get("max_tokens"),
+            timeout_sec=data.get("timeout_sec"),
         )
         return jsonify({"status": "connected" if ok else "error"})
     except Exception as e:
@@ -362,12 +398,15 @@ def demo_stop():
 @app.route("/api/ecg/stream")
 def ecg_stream():
     """Poll-based ECG data endpoint (called every ~100ms by frontend)."""
-    max_points = int(state.sample_rate * state.time_window_sec)
+    effective_rate = state.effective_sample_rate()
+    max_points = int(effective_rate * state.time_window_sec)
     mv_data = state.get_recent_mv(max_points=max_points)
     metrics = state.compute_metrics() if len(mv_data) > 50 else {}
     return jsonify({
         "data": mv_data,
-        "sample_rate": state.sample_rate,
+        "sample_rate": effective_rate,
+        "sample_rate_configured": state.sample_rate,
+        "sample_rate_mode": state.sample_rate_mode,
         "time_window": state.time_window_sec,
         "demo_mode": state.demo_mode,
         "serial_connected": state.serial_connected,
@@ -377,14 +416,20 @@ def ecg_stream():
             "heart_rate_bpm": metrics.get("heart_rate_bpm"),
             "heart_rate_source": metrics.get("heart_rate_source"),
             "heart_rate_method": metrics.get("heart_rate_method"),
+            "heart_rate_zone": metrics.get("heart_rate_zone"),
             "heart_rate_zone_label": metrics.get("heart_rate_zone_label"),
             "heart_rate_abnormal": metrics.get("heart_rate_abnormal"),
             "mains_interference_hz": metrics.get("mains_interference_hz"),
             "hf_noise_ratio": metrics.get("hf_noise_ratio"),
             "rhythm_label": metrics.get("rhythm_label"),
+            "rhythm_color_token": metrics.get("rhythm_color_token"),
+            "rr_variability": metrics.get("rr_variability"),
             "signal_quality_label": metrics.get("signal_quality_label"),
+            "signal_quality_color_token": metrics.get("signal_quality_color_token"),
             "peak_to_peak_mv": (metrics.get("peak_to_peak") or 0) / 1000.0,
-            "sample_rate_hz": metrics.get("sample_rate_hz", state.sample_rate),
+            "sample_rate_hz": metrics.get("sample_rate_hz", effective_rate),
+            "device_hr_bpm": metrics.get("device_hr_bpm"),
+            "sample_rate_correction": metrics.get("sample_rate_correction"),
             "qrs_count": metrics.get("qrs_count"),
         },
     })
@@ -401,6 +446,7 @@ _ERROR_HTTP_STATUS = {
     "server_error": 502,
     "bad_response": 502,
     "empty_response": 502,
+    "truncated_response": 502,
     "http_error": 502,
 }
 
@@ -441,7 +487,11 @@ if __name__ == "__main__":
     cfg = get_api_config()
     if cfg.get("api_key") and cfg.get("api_url") and cfg.get("model_id"):
         try:
-            state.setup_api(cfg["api_key"], cfg["api_url"], cfg["model_id"])
+            state.setup_api(
+                cfg["api_key"], cfg["api_url"], cfg["model_id"],
+                max_tokens=cfg.get("max_tokens"),
+                timeout_sec=cfg.get("timeout_sec"),
+            )
             print(f"[API] Auto-connected: {cfg['api_url']} | model: {cfg['model_id']}")
         except Exception as e:
             print(f"[API] Auto-connect failed: {e}")
