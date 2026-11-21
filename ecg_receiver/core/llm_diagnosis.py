@@ -119,6 +119,11 @@ _HTTP_ERROR_MAP = {
     429: ("rate_limited", "请求过于频繁或额度已用尽，请稍后重试"),
 }
 
+# Hard ceiling for the token-budget retry on truncated (finish_reason=length)
+# responses — reasoning models can spend the whole budget on hidden
+# chain-of-thought before emitting the JSON report.
+_MAX_TOKENS_CAP = 32768
+
 
 def _api_error_text(resp: requests.Response) -> str:
     """Best-effort extraction of the provider's own error message."""
@@ -165,12 +170,14 @@ class LLMDiagnosisClient:
         model_id: str = "gemini-pro",
         timeout: int = 60,
         sample_rate: float = DEFAULT_SAMPLE_RATE,
+        max_tokens: int = 8192,
     ):
         self.api_key = api_key
         self.api_url = api_url.rstrip("/")
         self.model_id = model_id
         self.timeout = timeout
         self.sample_rate = float(sample_rate)
+        self.max_tokens = int(max_tokens) if max_tokens else 8192
 
         if not self.api_url.endswith("/chat/completions"):
             base = self.api_url.rstrip("/")
@@ -229,18 +236,59 @@ class LLMDiagnosisClient:
             {"role": "user", "content": "\n".join(user_parts)},
         ]
 
+        max_tokens = self.max_tokens
+        result = self._post_chat(self._build_payload(messages, max_tokens))
+        content, finish_reason = self._extract_content(result)
+
+        # Reasoning models can burn the whole token budget on hidden
+        # chain-of-thought and return finish_reason="length" with empty
+        # content — retry once with a doubled budget before giving up.
+        if (
+            not (isinstance(content, str) and content.strip())
+            and finish_reason == "length"
+            and max_tokens < _MAX_TOKENS_CAP
+        ):
+            max_tokens = min(max_tokens * 2, _MAX_TOKENS_CAP)
+            result = self._post_chat(self._build_payload(messages, max_tokens))
+            content, finish_reason = self._extract_content(result)
+
+        if not isinstance(content, str) or not content.strip():
+            detail = json.dumps(result, ensure_ascii=False)[:300]
+            if finish_reason == "length":
+                raise DiagnosisAPIError(
+                    "truncated_response",
+                    "AI 模型输出被 token 上限截断（推理过程过长），请重试或更换模型",
+                    detail,
+                )
+            raise DiagnosisAPIError(
+                "empty_response",
+                "AI 服务返回了空内容，请重试或更换模型",
+                detail,
+            )
+
+        diagnosis = self._parse_diagnosis(content)
+        diagnosis["input_metrics"] = {
+            "heart_rate_bpm": processed_data.get("heart_rate_bpm"),
+            "heart_rate_source": processed_data.get("heart_rate_source"),
+            "sample_rate_hz": processed_data.get("sample_rate_hz"),
+            "signal_quality": processed_data.get("signal_quality"),
+        }
+        return diagnosis
+
+    def _build_payload(self, messages: List[Dict[str, str]], max_tokens: int) -> Dict[str, Any]:
+        return {
+            "model": self.model_id,
+            "messages": messages,
+            "temperature": 0.2,
+            "max_tokens": max_tokens,
+        }
+
+    def _post_chat(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """POST one chat-completion request; classify transport/HTTP errors."""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-
-        payload = {
-            "model": self.model_id,
-            "messages": messages,
-            "temperature": 0.2,
-            "max_tokens": 2048,
-        }
-
         try:
             resp = requests.post(
                 self.api_url,
@@ -269,7 +317,7 @@ class LLMDiagnosisClient:
             raise _classify_http_error(resp)
 
         try:
-            result = resp.json()
+            return resp.json()
         except ValueError:
             raise DiagnosisAPIError(
                 "bad_response",
@@ -277,30 +325,20 @@ class LLMDiagnosisClient:
                 (resp.text or "")[:300],
             ) from None
 
+    @staticmethod
+    def _extract_content(result: Dict[str, Any]):
+        """Return (content, finish_reason); raise bad_response on malformed body."""
         try:
-            content = result["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError):
+            choice = result["choices"][0]
+            content = choice["message"].get("content")
+            finish_reason = choice.get("finish_reason")
+            return content, finish_reason
+        except (KeyError, IndexError, TypeError, AttributeError):
             raise DiagnosisAPIError(
                 "bad_response",
                 "AI 服务响应缺少 choices 字段，模型或接口可能不兼容",
                 json.dumps(result, ensure_ascii=False)[:300],
             ) from None
-
-        if not isinstance(content, str) or not content.strip():
-            raise DiagnosisAPIError(
-                "empty_response",
-                "AI 服务返回了空内容，请重试或更换模型",
-                json.dumps(result, ensure_ascii=False)[:300],
-            )
-
-        diagnosis = self._parse_diagnosis(content)
-        diagnosis["input_metrics"] = {
-            "heart_rate_bpm": processed_data.get("heart_rate_bpm"),
-            "heart_rate_source": processed_data.get("heart_rate_source"),
-            "sample_rate_hz": processed_data.get("sample_rate_hz"),
-            "signal_quality": processed_data.get("signal_quality"),
-        }
-        return diagnosis
 
     @staticmethod
     def _parse_diagnosis(raw_text: str) -> Dict[str, Any]:

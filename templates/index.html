@@ -4,363 +4,583 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ECG AI Diagnosis</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2311182e'/%3E%3Cpath d='M4 16h6l3-8 4 16 3-8h8' stroke='%233b82f6' stroke-width='2.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
 :root {
-  --bg: #0a0e1a;
-  --card: #111b2e;
-  --light: #1a2744;
-  --hover: #243352;
-  --text: #f1f5f9;
-  --gray: #94a3b8;
-  --green: #10b981;
-  --yellow: #f59e0b;
+  --bg: #0a0f1c;
+  --bg-soft: #0d1424;
+  --card: #111a2e;
+  --card-2: #0e1729;
+  --border: #22314f;
+  --border-soft: #1a2740;
+  --text: #e9eef8;
+  --muted: #8b9bb8;
+  --faint: #5d6c88;
+  --green: #22c55e;
+  --amber: #f59e0b;
   --red: #ef4444;
   --blue: #3b82f6;
-  --navy: #0c2340;
-  --border: #334155;
-  --radius: 10px;
+  --cyan: #22d3ee;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(0,0,0,.35), 0 4px 16px rgba(0,0,0,.18);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
+html { color-scheme: dark; }
 body {
-  font-family: 'Segoe UI', system-ui, sans-serif;
-  background: var(--bg);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background:
+    radial-gradient(1200px 500px at 70% -10%, rgba(59,130,246,.08), transparent 60%),
+    var(--bg);
   color: var(--text);
-  overflow-x: hidden;
+  min-height: 100vh;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
 }
-.app { display: flex; flex-direction: column; min-height: 100vh; }
+.app { display: flex; flex-direction: column; min-height: 100vh; max-width: 1560px; margin: 0 auto; }
+.mono, .value, .hr-big span { font-variant-numeric: tabular-nums; }
 
-/* Header */
-.header {
-  background: var(--card);
-  border-bottom: 1px solid var(--border);
-  padding: 12px 24px;
+/* ── Header ─────────────────────────────────────────────── */
+.topbar {
   display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border-soft);
+  background: linear-gradient(180deg, rgba(17,26,46,.9), rgba(14,23,41,.6));
+  backdrop-filter: blur(6px);
+  position: sticky; top: 0; z-index: 20;
 }
-.header h1 { font-size: 20px; font-weight: 700; }
-.header h1 span { color: var(--blue); }
-.header .status-bar { display: flex; gap: 16px; align-items: center; font-size: 13px; }
-.status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
-.dot-green { background: var(--green); }
-.dot-red { background: var(--red); }
-.dot-gray { background: var(--gray); }
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand-mark {
+  width: 38px; height: 38px; border-radius: 10px;
+  background: linear-gradient(135deg, #1d4ed8, #0e7490);
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 10px rgba(59,130,246,.35);
+}
+.brand-mark svg { width: 22px; height: 22px; }
+.brand h1 { font-size: 17px; font-weight: 700; letter-spacing: .2px; }
+.brand h1 em { font-style: normal; color: var(--blue); }
+.brand-sub { font-size: 11px; color: var(--faint); letter-spacing: .4px; margin-top: 1px; }
+.topbar-right { display: flex; align-items: center; gap: 10px; }
+#clock { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; margin-right: 4px; }
 
-/* Main layout — ECG on top, content below */
-.main { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
-.ecg-section { width: 100%; }
-.bottom-section { display: flex; gap: 8px; flex: 1; min-height: 0; }
-.bottom-left { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.bottom-right { width: 420px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+/* Status pills */
+.pill {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 5px 12px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; letter-spacing: .2px;
+  background: var(--card-2); border: 1px solid var(--border);
+  color: var(--muted); white-space: nowrap;
+}
+.pill .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.status-dot { display: inline-block; }
+.dot-green { background: var(--green); box-shadow: 0 0 6px rgba(34,197,94,.7); }
+.dot-red { background: var(--red); box-shadow: 0 0 6px rgba(239,68,68,.7); }
+.dot-yellow { background: var(--amber); box-shadow: 0 0 6px rgba(245,158,11,.7); }
+.dot-gray { background: var(--faint); }
+.pill.pill-live { border-color: rgba(34,197,94,.4); color: #bbf7d0; }
+.pill.pill-demo { border-color: rgba(245,158,11,.45); color: #fde68a; background: rgba(245,158,11,.08); }
+.pill.pill-warn { border-color: rgba(245,158,11,.45); color: #fde68a; }
 
-/* Cards */
+/* ── Layout ────────────────────────────────────────────── */
+.main { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px 8px; flex: 1; }
+
 .card {
   background: var(--card);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius);
+  box-shadow: var(--shadow);
   overflow: hidden;
+  display: flex; flex-direction: column;
 }
-.card-title {
-  background: var(--light);
-  padding: 8px 16px;
-  font-size: 14px;
-  font-weight: 600;
-  border-bottom: 1px solid var(--border);
+.card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--border-soft);
+  background: linear-gradient(180deg, rgba(255,255,255,.025), transparent);
 }
-.card-body { padding: 12px 16px; }
+.card-head h2 { font-size: 13px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: var(--muted); }
+.card-head .head-right { display: flex; align-items: center; gap: 8px; }
+.chip {
+  font-size: 11px; font-weight: 600; color: var(--muted);
+  background: var(--card-2); border: 1px solid var(--border-soft);
+  border-radius: 6px; padding: 3px 9px; letter-spacing: .3px;
+  font-variant-numeric: tabular-nums;
+}
+.chip.chip-live { color: #86efac; border-color: rgba(34,197,94,.35); }
+.chip.chip-warn { color: #fcd34d; border-color: rgba(245,158,11,.4); }
+.live-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+  box-shadow: 0 0 8px rgba(34,197,94,.8);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
 
-/* ECG Canvas — fixed medical display */
-.ecg-card { display: flex; flex-direction: column; }
-.ecg-card .card-body { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
-.ecg-display {
+/* ── ECG monitor ───────────────────────────────────────── */
+.ecg-stage {
   background: #fff5f7;
-  border-radius: 6px;
-  padding: 4px;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  overflow: hidden;
+  margin: 10px 12px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid #f3d3dc;
+  overflow-x: auto;
+  display: flex; justify-content: center;
 }
 #ecgCanvas {
   display: block;
   background: #fff5f7;
-  border-radius: 4px;
-  width: 1000px !important;
-  height: 160px !important;
-  max-width: 1000px !important;
-  max-height: 160px !important;
-  flex-shrink: 0;
-  flex-grow: 0;
-  flex-basis: 1000px;
+  width: 1000px; height: 170px;
+  max-width: none;
 }
-.ecg-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.ecg-label {
-  font-size: 11px; color: var(--gray);
-  display: flex; gap: 12px; align-items: center;
+.signal-alerts {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 8px 16px 0;
 }
-.ecg-label .lead { color: var(--text); font-weight: 600; }
+.alert-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; font-weight: 600;
+  padding: 4px 10px; border-radius: 6px;
+  border: 1px solid;
+}
+.alert-chip.warn { color: #fcd34d; border-color: rgba(245,158,11,.4); background: rgba(245,158,11,.07); }
+.alert-chip.info { color: #7dd3fc; border-color: rgba(56,189,248,.35); background: rgba(56,189,248,.07); }
 
-/* COM port selector */
+.toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap;
+  padding: 10px 16px 14px;
+}
+.toolbar-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.toolbar-sep { width: 1px; height: 24px; background: var(--border-soft); margin: 0 4px; }
+#sampleInfo { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+/* ── COM bar ───────────────────────────────────────────── */
 .com-bar {
-  display: flex; align-items: center; gap: 8px;
-  background: var(--light); border-radius: 8px; padding: 6px 10px;
+  display: flex; align-items: center; gap: 7px;
+  background: var(--card-2); border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm); padding: 5px 9px;
 }
 .com-bar select {
-  padding: 5px 8px; background: var(--bg); border: 1px solid var(--border);
-  border-radius: 4px; color: var(--text); font-size: 12px; outline: none;
+  padding: 5px 8px; background: var(--bg-soft); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); font-size: 12px; outline: none;
+  max-width: 210px;
 }
-.com-bar .com-status { font-size: 12px; color: var(--gray); }
+.com-bar .com-status { font-size: 11px; color: var(--faint); font-weight: 600; letter-spacing: .4px; }
+#portCount { font-size: 10.5px; color: var(--faint); }
 
-/* Buttons */
+/* ── Buttons ───────────────────────────────────────────── */
 .btn {
-  padding: 8px 18px;
-  border: none;
-  border-radius: 6px;
-  font-size: 13px;
+  padding: 7px 16px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity .15s;
+  transition: filter .15s, transform .05s, background .15s;
+  letter-spacing: .2px;
+  white-space: nowrap;
 }
-.btn:hover { opacity: .85; }
-.btn:disabled { opacity: .4; cursor: not-allowed; }
-.btn-primary { background: var(--blue); color: #fff; }
-.btn-success { background: var(--green); color: #fff; }
-.btn-warning { background: var(--yellow); color: #000; }
-.btn-danger { background: var(--red); color: #fff; }
-.btn-secondary { background: var(--light); color: var(--text); border: 1px solid var(--border); }
+.btn:hover { filter: brightness(1.12); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .4; cursor: not-allowed; filter: none; }
+.btn-sm { padding: 5px 12px; font-size: 11.5px; }
+.btn-primary { background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #fff; box-shadow: 0 2px 8px rgba(37,99,235,.35); }
+.btn-success { background: #15803d; color: #fff; }
+.btn-warning { background: #b45309; color: #fff; }
+.btn-danger { background: #b91c1c; color: #fff; }
+.btn-secondary { background: var(--card-2); color: var(--text); border-color: var(--border); }
+.btn-lg { padding: 9px 22px; font-size: 13.5px; }
+#diagnoseBtn { display: inline-flex; align-items: center; gap: 7px; }
+#diagnoseBtn::before { content: '▶'; font-size: 10px; }
+#diagnoseBtn.analyzing::before { content: '◌'; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
-/* Stats grid */
-.stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
-.stat-tile {
-  background: var(--light);
-  border-radius: 8px;
-  padding: 10px 6px;
-  text-align: center;
+/* ── 3-column band ─────────────────────────────────────── */
+.band-3 {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr 1fr;
+  gap: 14px;
+  align-items: stretch;
 }
-.stat-tile .label { font-size: 11px; color: var(--gray); margin-bottom: 4px; }
-.stat-tile .value { font-size: 18px; font-weight: 700; }
+.band-3 .card { min-height: 0; }
+@media (max-width: 1150px) {
+  .band-3 { grid-template-columns: 1fr 1fr; }
+  .band-3 .card.service-card { grid-column: 1 / -1; }
+}
+@media (max-width: 760px) { .band-3 { grid-template-columns: 1fr; } }
 
-/* Inputs */
-.field { margin-bottom: 10px; }
-.field label { display: block; font-size: 12px; color: var(--gray); margin-bottom: 4px; }
-.field input, .field select {
+/* ── Vitals ────────────────────────────────────────────── */
+.vitals-hero {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.hr-big { display: flex; align-items: baseline; gap: 8px; }
+.hr-big span {
+  font-size: 46px; font-weight: 800; line-height: 1; letter-spacing: -1px;
+  color: var(--muted);
+  transition: color .3s;
+}
+.hr-big small { font-size: 12px; color: var(--faint); font-weight: 600; letter-spacing: 1px; }
+.hr-zone {
+  font-size: 12px; font-weight: 700; padding: 5px 13px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--faint); background: var(--card-2);
+  letter-spacing: .3px; transition: all .3s;
+}
+.hr-zone.zone-normal { color: #86efac; border-color: rgba(34,197,94,.45); background: rgba(34,197,94,.1); }
+.hr-zone.zone-warn { color: #fcd34d; border-color: rgba(245,158,11,.45); background: rgba(245,158,11,.1); }
+.hr-zone.zone-bad { color: #fca5a5; border-color: rgba(239,68,68,.45); background: rgba(239,68,68,.1); }
+.hr-zone.zone-live { animation: pulse 2s ease-in-out infinite; }
+
+.vitals-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 1px; background: var(--border-soft);
+}
+.vtile {
+  background: var(--card); padding: 11px 14px 12px;
+}
+.vtile .vlabel { font-size: 10.5px; color: var(--faint); font-weight: 700; letter-spacing: .8px; text-transform: uppercase; margin-bottom: 5px; }
+.vtile .vvalue { font-size: 15px; font-weight: 700; color: var(--text); }
+.vtile .vvalue.sm { font-size: 12.5px; font-weight: 600; }
+.vtile .vvalue small { font-size: 10.5px; color: var(--faint); font-weight: 600; margin-left: 3px; }
+.vtile .vsub { font-size: 10px; color: var(--faint); margin-top: 3px; }
+
+/* ── Forms ─────────────────────────────────────────────── */
+.card-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.field { margin-bottom: 0; }
+.field label {
+  display: block; font-size: 10.5px; color: var(--faint);
+  font-weight: 700; letter-spacing: .7px; text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.field-row { display: flex; gap: 8px; }
+.field-row .field { flex: 1; }
+.field input, .field select, .field textarea {
   width: 100%;
   padding: 8px 10px;
-  background: var(--light);
+  background: var(--card-2);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   color: var(--text);
   font-size: 13px;
   outline: none;
+  transition: border-color .15s, box-shadow .15s;
+  font-family: inherit;
 }
-.field input:focus { border-color: var(--blue); }
+.field input:focus, .field select:focus, .field textarea:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(59,130,246,.15);
+}
+.field textarea { resize: vertical; min-height: 52px; }
+.field-hint { font-size: 10.5px; color: var(--faint); margin-top: 3px; }
 
-/* API bar */
+/* ── API / service card ────────────────────────────────── */
 .api-bar {
   display: flex; align-items: center; gap: 10px;
-  background: var(--light); border-radius: 8px; padding: 8px 12px;
+  background: var(--card-2); border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm); padding: 9px 12px;
 }
-.api-bar .api-text { flex: 1; font-size: 13px; color: var(--gray); }
-.api-bar .api-text.connected { color: var(--green); }
-.api-bar .api-text.error { color: var(--red); }
-
-/* Collapsible */
+.api-bar .status-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.api-bar .api-text { flex: 1; font-size: 12.5px; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.api-bar .api-text.connected { color: #86efac; }
+.api-bar .api-text.error { color: #fca5a5; }
+.api-bar .api-text .model-name { color: var(--faint); font-size: 11px; }
 .collapse { display: none; }
 .collapse.open { display: block; }
+.service-meta { font-size: 11px; color: var(--faint); line-height: 1.7; }
+.service-meta b { color: var(--muted); font-weight: 600; }
 
-/* Diagnosis results */
-.results { flex: 1; overflow-y: auto; }
+/* ── Diagnosis ─────────────────────────────────────────── */
+.results { padding: 14px 16px; }
+.progress-wrap { margin-bottom: 12px; }
+.progress-bar {
+  height: 5px; background: var(--card-2); border-radius: 3px; overflow: hidden;
+  border: 1px solid var(--border-soft);
+}
+.progress-fill { height: 100%; background: linear-gradient(90deg, #2563eb, #22d3ee); width: 0%; transition: width .4s ease; border-radius: 3px; }
+.progress-text { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+
+.overview {
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 16px 18px;
+  margin-bottom: 14px;
+  position: relative;
+}
+.overview .badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 14px; border-radius: 999px;
+  font-size: 12px; font-weight: 800; letter-spacing: 1px;
+  margin-bottom: 10px;
+}
+.overview .badge::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.overview .primary { font-size: 19px; font-weight: 700; margin-bottom: 6px; line-height: 1.3; }
+.overview .meta { font-size: 12px; color: var(--muted); }
+.overview .conf-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.overview .conf-bar { flex: 1; max-width: 220px; height: 5px; background: var(--bg-soft); border-radius: 3px; overflow: hidden; border: 1px solid var(--border-soft); }
+.overview .conf-fill { height: 100%; background: var(--green); border-radius: 3px; transition: width .5s; }
+.overview .conf-label { font-size: 11px; color: var(--faint); font-weight: 600; }
+.overview .err-code {
+  font-size: 10.5px; color: var(--faint); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 7px; margin-left: 8px; font-family: ui-monospace, monospace;
+  vertical-align: middle;
+}
+.overview .err-detail { font-size: 11px; color: var(--faint); margin-top: 8px; word-break: break-all; line-height: 1.5; }
+
+.dx-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 12px;
+}
 .result-section {
-  background: var(--light);
-  border-radius: 8px;
-  margin-bottom: 8px;
+  background: var(--card-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 .result-section h4 {
-  padding: 8px 12px;
-  font-size: 13px;
-  font-weight: 600;
-  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 14px;
+  font-size: 11px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border-soft);
+  background: rgba(255,255,255,.015);
+}
+.result-section h4 .sec-num {
+  width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0;
+  background: rgba(59,130,246,.15); color: #93c5fd;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 800;
 }
 .result-section .content {
-  padding: 10px 12px;
+  padding: 12px 14px;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.65;
   white-space: pre-wrap;
-  color: var(--text);
-  min-height: 60px;
+  color: #dbe4f0;
+  min-height: 56px;
 }
-.overview {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px;
-  margin-bottom: 8px;
+.dx-disclaimer {
+  margin-top: 12px; padding: 10px 14px;
+  font-size: 11px; color: var(--faint); line-height: 1.6;
+  border: 1px dashed var(--border); border-radius: var(--radius-sm);
+  background: rgba(255,255,255,.015);
 }
-.overview .badge {
-  display: inline-block;
-  padding: 3px 12px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 700;
-  margin-bottom: 8px;
-}
-.overview .primary { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
-.overview .meta { font-size: 12px; color: var(--gray); }
 
-/* Progress */
-.progress-wrap { margin: 8px 0; }
-.progress-bar {
-  height: 6px;
-  background: var(--light);
-  border-radius: 3px;
-  overflow: hidden;
+/* ── Toasts ────────────────────────────────────────────── */
+#toastWrap {
+  position: fixed; bottom: 18px; right: 18px; z-index: 100;
+  display: flex; flex-direction: column; gap: 8px; max-width: 360px;
 }
-.progress-fill {
-  height: 100%;
-  background: var(--blue);
-  width: 0%;
-  transition: width .3s;
+.toast {
+  display: flex; align-items: flex-start; gap: 9px;
+  background: #1a2438; border: 1px solid var(--border);
+  border-left: 3px solid var(--blue);
+  border-radius: var(--radius-sm);
+  padding: 10px 13px; font-size: 12.5px; color: var(--text);
+  box-shadow: 0 6px 24px rgba(0,0,0,.45);
+  animation: toastIn .25s ease;
 }
-.progress-text { font-size: 12px; color: var(--gray); margin-top: 4px; }
+.toast.success { border-left-color: var(--green); }
+.toast.error { border-left-color: var(--red); }
+.toast.warn { border-left-color: var(--amber); }
+.toast .t-icon { flex-shrink: 0; font-weight: 800; }
+.toast.success .t-icon { color: var(--green); }
+.toast.error .t-icon { color: var(--red); }
+.toast.warn .t-icon { color: var(--amber); }
+.toast.info .t-icon { color: var(--blue); }
+.toast.out { animation: toastOut .3s ease forwards; }
+@keyframes toastIn { from { opacity: 0; transform: translateX(24px); } }
+@keyframes toastOut { to { opacity: 0; transform: translateX(24px); } }
 
-/* Footer */
+/* ── Footer ────────────────────────────────────────────── */
 .footer {
-  background: var(--card);
-  border-top: 1px solid var(--border);
-  padding: 8px 24px;
-  font-size: 12px;
-  color: var(--gray);
-  display: flex; justify-content: space-between;
+  border-top: 1px solid var(--border-soft);
+  padding: 10px 24px;
+  font-size: 11.5px;
+  color: var(--faint);
+  display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  background: var(--bg-soft);
+}
+.footer .disclaimer { color: var(--faint); }
+
+@media (max-width: 640px) {
+  .topbar { padding: 10px 14px; }
+  .brand-sub, #clock { display: none; }
+  .main { padding: 10px; }
 }
 </style>
 </head>
 <body>
 <div class="app">
   <!-- Header -->
-  <div class="header">
-    <h1>ECG AI <span>Diagnosis</span></h1>
-    <div class="status-bar">
-      <span id="connStatus"><span class="status-dot dot-gray"></span>Disconnected</span>
-      <span id="apiStatus"><span class="status-dot dot-gray"></span>API: Not configured</span>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 12h4l2-6 4 12 2-6h8"/>
+        </svg>
+      </div>
+      <div>
+        <h1>ECG AI <em>Diagnosis</em></h1>
+        <div class="brand-sub">Real-time cardiac monitoring · AI-assisted analysis</div>
+      </div>
     </div>
-  </div>
+    <div class="topbar-right">
+      <span id="clock"></span>
+      <span class="pill" id="connStatus"><span class="status-dot dot-gray"></span>Disconnected</span>
+      <span class="pill pill-demo" id="demoPill" hidden>DEMO MODE</span>
+      <span class="pill" id="apiStatus"><span class="status-dot dot-gray"></span>API: Not configured</span>
+    </div>
+  </header>
 
-  <!-- Main -->
   <div class="main">
-    <!-- Top: ECG Strip (full width) -->
-    <div class="ecg-section">
-      <div class="card ecg-card">
-        <div class="card-title">Medical ECG Strip
-          <span style="float:right;font-size:12px;color:var(--gray);font-weight:400;">Lead II · 25 mm/s · 10 mm/mV</span>
+    <!-- ECG Monitor -->
+    <section class="card">
+      <div class="card-head">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <h2>ECG Monitor</h2>
+          <span class="live-dot" id="liveDot" hidden></span>
+        </div>
+        <div class="head-right">
+          <span class="chip">Lead II</span>
+          <span class="chip">25 mm/s</span>
+          <span class="chip">10 mm/mV</span>
+          <span class="chip" id="fsChip">— Hz</span>
+        </div>
+      </div>
+      <div class="ecg-stage">
+        <canvas id="ecgCanvas" width="1000" height="170"></canvas>
+      </div>
+      <div class="signal-alerts" id="signalAlerts" hidden></div>
+      <div class="toolbar">
+        <div class="toolbar-group">
+          <button class="btn btn-secondary btn-sm" id="demoBtn" onclick="toggleDemo()">Demo Waveform</button>
+          <div class="com-bar">
+            <span class="com-status">COM</span>
+            <select id="comPortSelect"><option value="">-- Select Port --</option></select>
+            <button class="btn btn-success btn-sm" id="comConnectBtn" onclick="toggleSerial()">Connect</button>
+            <button class="btn btn-secondary btn-sm" onclick="refreshPorts()">Rescan</button>
+            <span id="portCount"></span>
+          </div>
+        </div>
+        <div class="toolbar-group">
+          <span id="sampleInfo"></span>
+          <button class="btn btn-primary btn-lg" id="diagnoseBtn" onclick="runDiagnosis()" disabled>Analyze ECG</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3-column band -->
+    <div class="band-3">
+      <!-- Live Vitals -->
+      <section class="card vitals-card">
+        <div class="card-head">
+          <h2>Live Vitals</h2>
+          <div class="head-right"><span class="chip chip-live" id="hrMethodChip">R-peaks</span></div>
+        </div>
+        <div class="vitals-hero">
+          <div class="hr-big"><span id="statHR">--</span><small>BPM</small></div>
+          <div class="hr-zone" id="hrZoneChip">Awaiting data</div>
+        </div>
+        <div class="vitals-grid">
+          <div class="vtile"><div class="vlabel">Rhythm</div><div class="vvalue sm" id="statRhythm">--</div><div class="vsub" id="statRhythmSub"></div></div>
+          <div class="vtile"><div class="vlabel">Quality</div><div class="vvalue sm" id="statQuality">--</div><div class="vsub" id="statQualitySub"></div></div>
+          <div class="vtile"><div class="vlabel">Method</div><div class="vvalue sm" id="statMethod">--</div><div class="vsub" id="statMethodSub"></div></div>
+          <div class="vtile"><div class="vlabel">Sample Rate</div><div class="vvalue" id="statFs">--</div></div>
+          <div class="vtile"><div class="vlabel">P-P Amp</div><div class="vvalue" id="statPP">--</div></div>
+          <div class="vtile"><div class="vlabel">QRS / Window</div><div class="vvalue" id="statQrs">--</div><div class="vsub" id="statQrsSub"></div></div>
+        </div>
+      </section>
+
+      <!-- Patient -->
+      <section class="card">
+        <div class="card-head"><h2>Patient Information</h2></div>
+        <div class="card-body">
+          <div class="field"><label for="nameInput">Name / ID</label><input type="text" id="nameInput" placeholder="e.g. Patient-001" autocomplete="off"></div>
+          <div class="field-row">
+            <div class="field"><label for="ageInput">Age</label><input type="text" id="ageInput" placeholder="45" inputmode="numeric"></div>
+            <div class="field"><label for="genderInput">Gender</label>
+              <select id="genderInput"><option value="">--</option><option>Male</option><option>Female</option><option>Other</option></select>
+            </div>
+          </div>
+          <div class="field"><label for="symptomsInput">Symptoms / Context</label><input type="text" id="symptomsInput" placeholder="e.g. chest pain, palpitations — or 'routine checkup'" autocomplete="off"></div>
+          <div class="field"><label for="notesInput">Clinical Notes</label><textarea id="notesInput" placeholder="medications, history, circumstances of recording..."></textarea></div>
+          <div class="field-hint">Saved locally in this browser · included in AI analysis context</div>
+        </div>
+      </section>
+
+      <!-- AI Service -->
+      <section class="card service-card">
+        <div class="card-head">
+          <h2>AI Service</h2>
+          <div class="head-right">
+            <button class="btn btn-secondary btn-sm" onclick="toggleApiSettings()" id="apiSettingsBtn">Settings</button>
+          </div>
         </div>
         <div class="card-body">
-          <div class="ecg-display">
-            <canvas id="ecgCanvas" width="1000" height="160"></canvas>
+          <div class="api-bar">
+            <span class="status-dot dot-gray" id="apiDot"></span>
+            <span class="api-text" id="apiText">API not configured</span>
           </div>
-          <div class="ecg-controls">
-            <button class="btn btn-secondary" id="demoBtn" onclick="toggleDemo()">Demo Waveform</button>
-            <button class="btn btn-primary" id="diagnoseBtn" onclick="runDiagnosis()" disabled>Analyze ECG</button>
-            <div class="com-bar">
-              <span class="com-status">COM:</span>
-              <select id="comPortSelect"><option value="">-- Select Port --</option></select>
-              <button class="btn btn-success" id="comConnectBtn" style="padding:4px 12px;font-size:12px;" onclick="toggleSerial()">Connect</button>
-              <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="refreshPorts()">Scan</button>
-              <span id="portCount" style="font-size:11px;color:var(--gray);">--</span>
+          <div class="collapse" id="apiSettings">
+            <div style="margin-top:10px;">
+              <div class="field"><label>Model Preset</label>
+                <select id="presetSelect" onchange="onPresetChange()"></select>
+              </div>
+              <div class="field"><label>API Key</label><input type="password" id="apiKeyInput" placeholder="sk-..." autocomplete="off"></div>
+              <div class="field"><label>API URL</label><input type="text" id="apiUrlInput" placeholder="https://api.example.com/v1/" autocomplete="off"></div>
+              <div class="field"><label>Model ID</label><input type="text" id="modelIdInput" placeholder="gpt-4o, gemini-pro..." autocomplete="off"></div>
+              <button class="btn btn-primary btn-sm" onclick="setupApi(this)">Test &amp; Connect</button>
             </div>
-            <div class="ecg-label" style="margin-left:auto;">
-              <span class="lead">Lead II</span>
-              <span id="ecgGain">10 mm/mV</span>
-              <span id="ecgSpeed">25 mm/s</span>
-            </div>
+          </div>
+          <div class="service-meta" id="serviceMeta">
+            Configure an OpenAI-compatible endpoint to enable AI diagnosis.<br>
+            Keys can also be set via <b>.env</b> — see <b>.env.example</b>.
           </div>
         </div>
-      </div>
+      </section>
     </div>
 
-    <!-- Bottom: Left (stats + diagnosis) | Right (API + patient) -->
-    <div class="bottom-section">
-      <div class="bottom-left">
-        <!-- Stats -->
-        <div class="card">
-          <div class="card-title">Real-time Statistics</div>
-          <div class="card-body">
-            <div class="stats-grid">
-              <div class="stat-tile"><div class="label">HR</div><div class="value" id="statHR" style="color:var(--gray)">--</div></div>
-              <div class="stat-tile"><div class="label">Rhythm</div><div class="value" id="statRhythm" style="font-size:14px;color:var(--gray)">--</div></div>
-              <div class="stat-tile"><div class="label">Quality</div><div class="value" id="statQuality" style="font-size:14px;color:var(--gray)">--</div></div>
-              <div class="stat-tile"><div class="label">Fs</div><div class="value" id="statFs" style="font-size:14px;color:var(--gray)">--</div></div>
-              <div class="stat-tile"><div class="label">P-P</div><div class="value" id="statPP" style="font-size:14px;color:var(--gray)">--</div></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Diagnosis Results -->
-        <div class="card" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
-          <div class="card-title">AI Diagnosis Results</div>
-          <div class="card-body results" style="flex:1;overflow-y:auto;">
-            <div class="progress-wrap" id="progressWrap" style="display:none;">
-              <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-              <div class="progress-text" id="progressText">Starting...</div>
-            </div>
-            <div class="overview" id="overview">
-              <span class="badge" style="background:var(--light);color:var(--gray);">Awaiting analysis</span>
-              <div class="primary" style="color:var(--gray);">Run an ECG analysis to see results.</div>
-              <div class="meta">Start demo waveform or connect hardware, then click Analyze ECG.</div>
-            </div>
-            <div class="result-section"><h4>Key Findings</h4><div class="content" id="findingsText">No findings yet.</div></div>
-            <div class="result-section"><h4>Immediate Actions</h4><div class="content" id="actionsText">No actions yet.</div></div>
-            <div class="result-section"><h4>Follow-up & Lifestyle</h4><div class="content" id="followupText">No guidance yet.</div></div>
-            <div class="result-section"><h4>Clinical Notes</h4><div class="content" id="notesText">No notes yet.</div></div>
-          </div>
+    <!-- AI Diagnosis -->
+    <section class="card">
+      <div class="card-head">
+        <h2>AI Diagnosis Report</h2>
+        <div class="head-right">
+          <span class="chip" id="reportTime"></span>
+          <button class="btn btn-secondary btn-sm" id="copyReportBtn" onclick="copyReport()" disabled>Copy Report</button>
         </div>
       </div>
-
-      <div class="bottom-right">
-        <!-- API Status -->
-        <div class="card">
-          <div class="card-title">API Connection</div>
-          <div class="card-body">
-            <div class="api-bar">
-              <span class="status-dot dot-gray" id="apiDot"></span>
-              <span class="api-text" id="apiText">API not configured</span>
-              <button class="btn btn-secondary" style="padding:4px 12px;font-size:12px;" onclick="toggleApiSettings()">Settings</button>
-            </div>
-            <div class="collapse" id="apiSettings">
-              <div style="margin-top:10px;">
-                <div class="field"><label>Model Preset</label>
-                  <select id="presetSelect" onchange="onPresetChange()"></select>
-                </div>
-                <div class="field"><label>API Key</label><input type="password" id="apiKeyInput" placeholder="sk-..."></div>
-                <div class="field"><label>API URL</label><input type="text" id="apiUrlInput" placeholder="https://api.example.com/v1/"></div>
-                <div class="field"><label>Model ID</label><input type="text" id="modelIdInput" placeholder="gpt-4o, gemini-pro..."></div>
-                <button class="btn btn-primary" onclick="setupApi()">Connect API</button>
-              </div>
-            </div>
-          </div>
+      <div class="results">
+        <div class="progress-wrap" id="progressWrap" style="display:none;">
+          <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+          <div class="progress-text" id="progressText">Starting...</div>
         </div>
-
-        <!-- Patient Info -->
-        <div class="card">
-          <div class="card-title">Patient Information</div>
-          <div class="card-body">
-            <div style="display:flex;gap:10px;">
-              <div class="field" style="flex:1;"><label>Age</label><input type="text" id="ageInput" placeholder="45"></div>
-              <div class="field" style="flex:1;"><label>Gender</label>
-                <select id="genderInput"><option value="">--</option><option>Male</option><option>Female</option><option>Other</option></select>
-              </div>
-            </div>
-            <div class="field"><label>Symptoms</label><input type="text" id="symptomsInput" placeholder="chest pain, shortness of breath"></div>
-          </div>
+        <div class="overview" id="overview">
+          <span class="badge" style="background:var(--card-2);color:var(--muted);border:1px solid var(--border);">AWAITING ANALYSIS</span>
+          <div class="primary" style="color:var(--muted);">Run an ECG analysis to see results.</div>
+          <div class="meta">Start the demo waveform or connect hardware, then click <b>Analyze ECG</b>.</div>
+        </div>
+        <div class="dx-grid">
+          <div class="result-section"><h4><span class="sec-num">1</span>Key Findings</h4><div class="content" id="findingsText">No findings yet.</div></div>
+          <div class="result-section"><h4><span class="sec-num">2</span>Immediate Actions</h4><div class="content" id="actionsText">No actions yet.</div></div>
+          <div class="result-section"><h4><span class="sec-num">3</span>Follow-up &amp; Lifestyle</h4><div class="content" id="followupText">No guidance yet.</div></div>
+          <div class="result-section"><h4><span class="sec-num">4</span>Clinical Notes</h4><div class="content" id="notesText">No notes yet.</div></div>
+        </div>
+        <div class="dx-disclaimer">
+          AI-assisted analysis for education and research support only — not a substitute for evaluation by a licensed clinician. Always correlate with the patient's clinical presentation.
         </div>
       </div>
-    </div>
+    </section>
   </div>
 
   <!-- Footer -->
-  <div class="footer">
+  <footer class="footer">
     <span id="footerStatus">Ready</span>
-    <span>ECG AI v3.0 Web</span>
-  </div>
+    <span>ECG AI v3.0 Web · ADS1292 acquisition</span>
+  </footer>
 </div>
+
+<div id="toastWrap"></div>
 
 <script>
 // ── State ──────────────────────────────────────────────────
@@ -371,23 +591,62 @@ let sampleRate = 500;
 let timeWindow = 10;
 let presets = {};
 let polling = false;
+let lastDiagnosis = null;
+let analyzing = false;
+let lastConnHTML = '';
+
+const ZONE_CLASS = {
+  normal: 'zone-normal',
+  relative_bradycardia: 'zone-warn',
+  mild_tachycardia: 'zone-warn',
+  bradycardia: 'zone-bad',
+  tachycardia: 'zone-bad',
+  severe_tachycardia: 'zone-bad',
+  unknown: '',
+};
+const ZONE_TEXT_COLOR = {
+  normal: '#22c55e',
+  relative_bradycardia: '#f59e0b',
+  mild_tachycardia: '#f59e0b',
+  bradycardia: '#f87171',
+  tachycardia: '#f87171',
+  severe_tachycardia: '#ef4444',
+};
+const TOKEN_COLOR = { green: '#22c55e', yellow: '#f59e0b', red: '#ef4444', gray: '#8b9bb8' };
+const SEV_BADGE = {
+  normal: { bg: 'rgba(34,197,94,.15)', fg: '#86efac' },
+  low:    { bg: 'rgba(34,197,94,.15)', fg: '#86efac' },
+  abnormal: { bg: 'rgba(245,158,11,.15)', fg: '#fcd34d' },
+  critical:  { bg: 'rgba(239,68,68,.15)', fg: '#fca5a5' },
+};
+
+// ── Toasts ─────────────────────────────────────────────────
+function toast(msg, type = 'info', timeout = 4200) {
+  const wrap = document.getElementById('toastWrap');
+  const icons = { success: '✓', error: '✕', warn: '⚠', info: 'ℹ' };
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.innerHTML = `<span class="t-icon">${icons[type] || icons.info}</span><span></span>`;
+  el.lastElementChild.textContent = msg;
+  wrap.appendChild(el);
+  setTimeout(() => {
+    el.classList.add('out');
+    setTimeout(() => el.remove(), 320);
+  }, timeout);
+}
 
 // ── Canvas ECG Renderer ────────────────────────────────────
 const canvas = document.getElementById('ecgCanvas');
 const ctx = canvas.getContext('2d');
 
-// Fixed canvas: 1000x160 logical px, 4px per mm
 const PX_PER_MM = 4;
 const CANVAS_W = 1000;
-const CANVAS_H = 160;
-const PAPER_SPEED = 25; // mm/s
+const CANVAS_H = 170;
 const GAIN = 10; // mm/mV
 
 function setupCanvas() {
   canvas.width = CANVAS_W;
   canvas.height = CANVAS_H;
-  canvas.style.width = CANVAS_W + 'px';
-  canvas.style.height = CANVAS_H + 'px';
 }
 window.addEventListener('resize', setupCanvas);
 setTimeout(setupCanvas, 50);
@@ -397,74 +656,64 @@ function drawECG() {
   const h = CANVAS_H;
   ctx.clearRect(0, 0, w, h);
 
-  // Background — medical ECG paper pink
   ctx.fillStyle = '#fff5f7';
   ctx.fillRect(0, 0, w, h);
 
-  // Grid: 1mm minor, 5mm major (fixed PX_PER_MM = 4)
-  const minor = PX_PER_MM;       // 1mm = 4px
-  const major = PX_PER_MM * 5;   // 5mm = 20px
+  const minor = PX_PER_MM;
+  const major = PX_PER_MM * 5;
 
-  // Minor grid (1mm squares)
-  ctx.strokeStyle = '#f9c5d1';
+  ctx.strokeStyle = '#f4c3cf';
   ctx.lineWidth = 0.5;
   ctx.beginPath();
   for (let x = 0; x <= w; x += minor) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
   for (let y = 0; y <= h; y += minor) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
   ctx.stroke();
 
-  // Major grid (5mm squares)
-  ctx.strokeStyle = '#e8879a';
+  ctx.strokeStyle = '#eba9ba';
   ctx.lineWidth = 0.9;
   ctx.beginPath();
   for (let x = 0; x <= w; x += major) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
   for (let y = 0; y <= h; y += major) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
   ctx.stroke();
 
-  // Baseline (center of canvas, 0 mV)
   const baselineY = h / 2;
 
-  // ECG trace
   if (ecgData.length < 2) {
-    ctx.fillStyle = '#64748b';
-    ctx.font = '12px monospace';
-    ctx.fillText('Awaiting ECG data...', 12, 20);
-    // Draw 1mV calibration pulse placeholder
-    ctx.strokeStyle = '#94a3b8';
+    ctx.fillStyle = '#7a8aa5';
+    ctx.font = '12px "Segoe UI", sans-serif';
+    ctx.fillText('Awaiting ECG data — start demo or connect hardware', 14, 22);
+    ctx.strokeStyle = '#a8b6cc';
     ctx.lineWidth = 1;
     ctx.setLineDash([3, 3]);
     ctx.beginPath();
-    ctx.moveTo(8, baselineY);
-    ctx.lineTo(8, baselineY - GAIN * PX_PER_MM); // 1mV up
-    ctx.lineTo(20, baselineY - GAIN * PX_PER_MM);
-    ctx.lineTo(20, baselineY);
+    ctx.moveTo(10, baselineY);
+    ctx.lineTo(10, baselineY - GAIN * PX_PER_MM);
+    ctx.lineTo(22, baselineY - GAIN * PX_PER_MM);
+    ctx.lineTo(22, baselineY);
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = '#94a3b8';
+    ctx.fillStyle = '#8b9bb8';
     ctx.font = '9px monospace';
-    ctx.fillText('1mV', 24, baselineY - GAIN * PX_PER_MM + 4);
+    ctx.fillText('1 mV', 26, baselineY - GAIN * PX_PER_MM + 4);
+    ctx.fillStyle = '#a8b6cc';
+    ctx.font = '9px monospace';
+    ctx.fillText('25 mm/s', w - 62, h - 8);
     return;
   }
 
-  // Fixed medical scaling: 1 mV = GAIN mm = GAIN * PX_PER_MM pixels
-  // Data is in mV, so y = baselineY - (mV * GAIN * PX_PER_MM)
-  // Auto-detect amplitude to center the trace
   let minV = Infinity, maxV = -Infinity;
   for (const v of ecgData) { if (v < minV) minV = v; if (v > maxV) maxV = v; }
   const ptp = maxV - minV || 1;
-  // Check if data fits in canvas with fixed gain
   const ptpPx = ptp * GAIN * PX_PER_MM;
   let effectiveGain = GAIN;
-  if (ptpPx > h * 0.85) {
-    // Auto-reduce gain if signal too tall
-    effectiveGain = (h * 0.85) / (ptp * PX_PER_MM);
+  if (ptpPx > h * 0.82) {
+    effectiveGain = (h * 0.82) / (ptp * PX_PER_MM);
   }
   const center = (maxV + minV) / 2;
-  // Center the signal on baseline
   const yOffset = baselineY - center * effectiveGain * PX_PER_MM;
 
-  ctx.strokeStyle = '#0c2340';
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = '#12315e';
+  ctx.lineWidth = 1.6;
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
   ctx.beginPath();
@@ -472,18 +721,16 @@ function drawECG() {
   const n = ecgData.length;
   for (let i = 0; i < n; i++) {
     const x = (i / (n - 1)) * w;
-    const y = yOffset + ecgData[i] * effectiveGain * PX_PER_MM * -1;
-    // Wait: y should be baselineY - (value * gain * pxPerMm)
     const yCorrect = baselineY - (ecgData[i] - center) * effectiveGain * PX_PER_MM;
     if (i === 0) ctx.moveTo(x, yCorrect);
     else ctx.lineTo(x, yCorrect);
   }
   ctx.stroke();
 
-  // 1mV calibration pulse (top-left corner)
-  const calX = 6, calW = 12;
-  const calH = effectiveGain * PX_PER_MM; // 1mV in pixels
-  ctx.strokeStyle = '#0c2340';
+  // Calibration pulse
+  const calX = 8, calW = 12;
+  const calH = effectiveGain * PX_PER_MM;
+  ctx.strokeStyle = '#12315e';
   ctx.lineWidth = 1.2;
   ctx.beginPath();
   ctx.moveTo(calX, baselineY);
@@ -491,9 +738,9 @@ function drawECG() {
   ctx.lineTo(calX + calW, baselineY - calH);
   ctx.lineTo(calX + calW, baselineY);
   ctx.stroke();
-  ctx.fillStyle = '#64748b';
+  ctx.fillStyle = '#7a8aa5';
   ctx.font = '8px monospace';
-  ctx.fillText('1mV', calX + calW + 3, baselineY - calH + 4);
+  ctx.fillText('1 mV', calX + calW + 3, baselineY - calH + 4);
 
   // Metric overlay (top-right)
   const m = lastMetrics;
@@ -505,28 +752,148 @@ function drawECG() {
       `Quality ${(m.signal_quality_label || '--').substring(0, 12)}`,
       `PP  ${((m.peak_to_peak_mv) || 0).toFixed(2)} mV`,
       `Fs  ${(m.sample_rate_hz || sampleRate).toFixed(0)} Hz`,
+      m.heart_rate_method && m.heart_rate_method !== 'qrs_peaks' ? 'Method LF-est' : null,
     ].filter(Boolean);
-    const boxW = 130, boxH = lines.length * 11 + 6;
-    const boxX = w - boxW - 6, boxY = 4;
-    ctx.fillStyle = 'rgba(255,252,253,0.92)';
+    const boxW = 148, boxH = lines.length * 11 + 8;
+    const boxX = w - boxW - 8, boxY = 6;
+    ctx.fillStyle = 'rgba(255,252,253,0.94)';
     ctx.fillRect(boxX, boxY, boxW, boxH);
-    ctx.strokeStyle = '#e2e8f0';
-    ctx.lineWidth = 0.5;
+    ctx.strokeStyle = '#e3c9d2';
+    ctx.lineWidth = 0.6;
     ctx.strokeRect(boxX, boxY, boxW, boxH);
-    ctx.fillStyle = '#1e293b';
+    ctx.fillStyle = '#22304a';
     ctx.font = '8px monospace';
-    lines.forEach((line, i) => ctx.fillText(line, boxX + 4, boxY + 12 + i * 11));
+    lines.forEach((line, i) => ctx.fillText(line, boxX + 5, boxY + 13 + i * 11));
   }
 
-  // Lead label (bottom-left)
-  ctx.fillStyle = '#64748b';
+  ctx.fillStyle = '#8b9bb8';
   ctx.font = '9px monospace';
-  ctx.fillText('Lead II', 6, h - 6);
+  ctx.fillText('Lead II', 8, h - 8);
 }
 
 let lastMetrics = {};
 
+// ── Live stats / vitals ────────────────────────────────────
+function setVal(id, text, color) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  if (color) el.style.color = color;
+}
+
+function updateStats(m) {
+  const hr = m.heart_rate_bpm;
+  const hrEl = document.getElementById('statHR');
+  hrEl.textContent = hr ? hr.toFixed(0) : '--';
+  hrEl.style.color = hr ? (ZONE_TEXT_COLOR[m.heart_rate_zone] || '#8b9bb8') : '#5d6c88';
+
+  // Zone chip
+  const zoneEl = document.getElementById('hrZoneChip');
+  const zoneKey = m.heart_rate_zone || 'unknown';
+  zoneEl.textContent = m.heart_rate_zone_label || 'Awaiting data';
+  zoneEl.className = 'hr-zone ' + (ZONE_CLASS[zoneKey] || '');
+  if (m.heart_rate_abnormal && zoneKey !== 'unknown') zoneEl.classList.add('zone-live');
+
+  // Tiles with color tokens
+  const rhythmTok = m.rhythm_color_token || 'gray';
+  setVal('statRhythm', m.rhythm_label || '--', TOKEN_COLOR[rhythmTok] || null);
+  document.getElementById('statRhythmSub').textContent = m.rr_variability != null ? `RR CV ${(m.rr_variability * 100).toFixed(0)}%` : '';
+
+  const qTok = m.signal_quality_color_token || 'gray';
+  setVal('statQuality', m.signal_quality_label || '--', TOKEN_COLOR[qTok] || null);
+  document.getElementById('statQualitySub').textContent = m.mains_interference_hz ? `${m.mains_interference_hz} Hz mains` : (m.hf_noise_ratio > 0.4 ? `HF share ${(m.hf_noise_ratio * 100).toFixed(0)}%` : '');
+
+  // Method tile
+  const method = m.heart_rate_method || '';
+  const methodEl = document.getElementById('statMethod');
+  const methodSub = document.getElementById('statMethodSub');
+  if (method === 'slow_component') {
+    methodEl.textContent = 'LF estimate';
+    methodEl.style.color = '#f59e0b';
+    methodSub.textContent = 'artifact fallback';
+  } else if (method === 'device') {
+    methodEl.textContent = 'Device';
+    methodEl.style.color = '#22d3ee';
+    methodSub.textContent = 'firmware HR';
+  } else if (method === 'qrs_peaks') {
+    methodEl.textContent = 'R-peaks';
+    methodEl.style.color = '#22c55e';
+    methodSub.textContent = 'QRS detection';
+  } else {
+    methodEl.textContent = '--';
+    methodEl.style.color = '';
+    methodSub.textContent = '';
+  }
+  const mChip = document.getElementById('hrMethodChip');
+  if (method === 'slow_component') {
+    mChip.textContent = 'LF estimate ⚠';
+    mChip.className = 'chip chip-warn';
+  } else if (method === 'device') {
+    mChip.textContent = 'Device HR';
+    mChip.className = 'chip';
+  } else {
+    mChip.textContent = 'R-peaks';
+    mChip.className = 'chip chip-live';
+  }
+
+  setVal('statFs', (m.sample_rate_hz || sampleRate).toFixed(0) + ' Hz');
+  setVal('statPP', m.peak_to_peak_mv ? m.peak_to_peak_mv.toFixed(2) + ' mV' : '--');
+  const qrsTxt = m.qrs_count != null ? String(m.qrs_count) : '--';
+  setVal('statQrs', qrsTxt);
+  document.getElementById('statQrsSub').textContent = timeWindow ? `${timeWindow}s window` : '';
+
+  // Signal-quality alert strip
+  renderSignalAlerts(m);
+
+  // FS chip in card head
+  document.getElementById('fsChip').textContent = (m.sample_rate_hz || sampleRate).toFixed(0) + ' Hz';
+}
+
+function renderSignalAlerts(m) {
+  const wrap = document.getElementById('signalAlerts');
+  const alerts = [];
+  if (m.sample_rate_correction) {
+    alerts.push({ cls: 'info', text: `Sample rate auto-corrected (${m.sample_rate_correction}) — device HR cross-check` });
+  }
+  if (m.mains_interference_hz) {
+    alerts.push({ cls: 'warn', text: `Mains interference ${m.mains_interference_hz} Hz detected — notch filter applied` });
+  }
+  if (m.heart_rate_method === 'slow_component') {
+    alerts.push({ cls: 'warn', text: 'HR estimated from low-frequency component — periodic artifact in QRS band' });
+  }
+  if (m.hf_noise_ratio != null && m.hf_noise_ratio > 0.45) {
+    alerts.push({ cls: 'info', text: `Elevated high-frequency noise (${(m.hf_noise_ratio * 100).toFixed(0)}%)` });
+  }
+  const qTok = m.signal_quality_color_token;
+  if (qTok === 'yellow' || qTok === 'red') {
+    alerts.push({ cls: qTok === 'red' ? 'warn' : 'info', text: `Signal quality: ${m.signal_quality_label || 'reduced'} — check electrode contact` });
+  }
+  if (alerts.length) {
+    wrap.innerHTML = alerts.map(a => `<span class="alert-chip ${a.cls}">⚠ ${a.text}</span>`).join('');
+    wrap.hidden = false;
+  } else {
+    wrap.innerHTML = '';
+    wrap.hidden = true;
+  }
+}
+
 // ── Polling ────────────────────────────────────────────────
+function syncDiagnoseBtn() {
+  document.getElementById('diagnoseBtn').disabled = analyzing || !(demoActive || serialActive);
+}
+
+// Connection pill is derived from server state every poll so it stays
+// correct on page load (e.g. demo already running) and after watchdogs.
+function setConnStatus(html) {
+  if (html !== lastConnHTML) {
+    lastConnHTML = html;
+    document.getElementById('connStatus').innerHTML = html;
+  }
+}
+const CONN_HTML = {
+  off: '<span class="status-dot dot-gray"></span>Disconnected',
+  demo: '<span class="status-dot dot-green"></span>Demo Mode',
+};
+
 async function pollECG() {
   if (polling) return;
   polling = true;
@@ -538,41 +905,50 @@ async function pollECG() {
     timeWindow = d.time_window || timeWindow;
     lastMetrics = d.metrics || {};
     demoActive = d.demo_mode;
+
+    document.getElementById('demoPill').hidden = !demoActive;
+    document.getElementById('liveDot').hidden = !(demoActive || d.serial_connected);
+    document.getElementById('fsChip').textContent = (lastMetrics.sample_rate_hz || sampleRate).toFixed(0) + ' Hz';
+    document.getElementById('sampleInfo').textContent =
+      ecgData.length ? `${ecgData.length} samples · ${timeWindow}s window` : '';
+
+    // Derived connection status
+    if (d.serial_connected) {
+      setConnStatus('<span class="status-dot dot-green"></span>Hardware: ' + (d.serial_port || ''));
+      if (d.serial_error) {
+        document.getElementById('footerStatus').textContent = d.serial_error;
+      }
+    } else if (demoActive) {
+      setConnStatus(CONN_HTML.demo);
+    } else if (d.serial_error) {
+      setConnStatus('<span class="status-dot dot-red"></span>' + d.serial_error);
+      document.getElementById('footerStatus').textContent = d.serial_error;
+    } else {
+      setConnStatus(CONN_HTML.off);
+    }
+
     // Auto-detect serial watchdog disconnect
     if (!d.serial_connected && serialActive) {
       serialActive = false;
-      const comBtn = document.getElementById('comConnectBtn');
-      comBtn.textContent = 'Connect';
-      comBtn.className = 'btn btn-success';
-      comBtn.style.padding = '4px 12px'; comBtn.style.fontSize = '12px';
-      if (d.serial_error) {
-        document.getElementById('connStatus').innerHTML = '<span class="status-dot dot-red"></span>' + d.serial_error;
-        document.getElementById('footerStatus').textContent = d.serial_error;
-      } else {
-        document.getElementById('connStatus').innerHTML = '<span class="status-dot dot-gray"></span>Disconnected';
-      }
-      document.getElementById('diagnoseBtn').disabled = !demoActive;
+      setConnectBtn('Connect', 'btn-success');
+      if (d.serial_error) toast(d.serial_error, 'error');
     }
+    syncDiagnoseBtn();
     updateStats(d.metrics || {});
     drawECG();
-  } catch (e) { /* ignore */ }
+  } catch (e) { /* transient poll failure — ignore */ }
   polling = false;
-}
-
-function updateStats(m) {
-  const hr = m.heart_rate_bpm;
-  const hrEl = document.getElementById('statHR');
-  hrEl.textContent = hr ? hr.toFixed(0) + ' BPM' : '--';
-  hrEl.style.color = hr ? (hr >= 60 && hr <= 100 ? 'var(--green)' : hr >= 50 && hr <= 110 ? 'var(--yellow)' : 'var(--red)') : 'var(--gray)';
-  document.getElementById('statRhythm').textContent = m.rhythm_label || '--';
-  document.getElementById('statQuality').textContent = m.signal_quality_label || '--';
-  document.getElementById('statFs').textContent = (m.sample_rate_hz || sampleRate).toFixed(0) + ' Hz';
-  document.getElementById('statPP').textContent = m.peak_to_peak_mv ? m.peak_to_peak_mv.toFixed(2) + ' mV' : '--';
 }
 
 setInterval(pollECG, 500);
 
 // ── Serial / COM Port ─────────────────────────────────────
+function setConnectBtn(text, cls) {
+  const btn = document.getElementById('comConnectBtn');
+  btn.textContent = text;
+  btn.className = 'btn ' + cls + ' btn-sm';
+}
+
 async function refreshPorts() {
   try {
     const res = await fetch('/api/serial/ports');
@@ -589,8 +965,10 @@ async function refreshPorts() {
       sel.appendChild(opt);
     }
     if (prev) sel.value = prev;
-    document.getElementById('portCount').textContent = ports.length + ' port(s) detected';
-  } catch (e) { console.error('refreshPorts failed:', e); }
+    document.getElementById('portCount').textContent = ports.length ? ports.length + ' port(s)' : '';
+  } catch (e) {
+    toast('Port scan failed: ' + e.message, 'error');
+  }
 }
 
 async function toggleSerial() {
@@ -599,14 +977,14 @@ async function toggleSerial() {
   if (serialActive) {
     await fetch('/api/serial/disconnect', { method: 'POST' });
     serialActive = false;
-    btn.textContent = 'Connect';
-    btn.className = 'btn btn-success';
-    btn.style.padding = '4px 12px'; btn.style.fontSize = '12px';
-    document.getElementById('connStatus').innerHTML = '<span class="status-dot dot-gray"></span>Disconnected';
-    document.getElementById('diagnoseBtn').disabled = !demoActive;
+    setConnectBtn('Connect', 'btn-success');
+    setConnStatus(CONN_HTML.off);
+    syncDiagnoseBtn();
+    toast('Hardware disconnected', 'info');
   } else {
     const port = sel.value;
-    if (!port) { alert('Please select a COM port first'); return; }
+    if (!port) { toast('Please select a COM port first', 'warn'); return; }
+    btn.disabled = true;
     try {
       const res = await fetch('/api/serial/connect', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -615,16 +993,18 @@ async function toggleSerial() {
       const d = await res.json();
       if (d.status === 'connected') {
         serialActive = true;
-        btn.textContent = 'Disconnect';
-        btn.className = 'btn btn-danger';
-        btn.style.padding = '4px 12px'; btn.style.fontSize = '12px';
-        document.getElementById('connStatus').innerHTML = '<span class="status-dot dot-green"></span>Connected: ' + port;
-        document.getElementById('diagnoseBtn').disabled = false;
+        setConnectBtn('Disconnect', 'btn-danger');
+        setConnStatus('<span class="status-dot dot-green"></span>Hardware: ' + port);
+        syncDiagnoseBtn();
         document.getElementById('footerStatus').textContent = 'Hardware connected on ' + port;
+        toast('Connected to ' + port, 'success');
       } else {
-        alert(d.error || ('Failed to connect to ' + port));
+        toast(d.error || ('Failed to connect to ' + port), 'error');
       }
-    } catch (e) { alert('Connection error: ' + e.message); }
+    } catch (e) {
+      toast('Connection error: ' + e.message, 'error');
+    }
+    btn.disabled = false;
   }
 }
 
@@ -635,34 +1015,68 @@ async function toggleDemo() {
     await fetch('/api/demo/stop', { method: 'POST' });
     demoActive = false;
     btn.textContent = 'Demo Waveform';
-    btn.className = 'btn btn-secondary';
+    btn.className = 'btn btn-secondary btn-sm';
+    document.getElementById('demoPill').hidden = true;
     if (!serialActive) {
-      document.getElementById('connStatus').innerHTML = '<span class="status-dot dot-gray"></span>Disconnected';
-      document.getElementById('diagnoseBtn').disabled = true;
+      setConnStatus(CONN_HTML.off);
     }
+    syncDiagnoseBtn();
+    toast('Demo waveform stopped', 'info');
   } else {
     if (serialActive) {
       await fetch('/api/serial/disconnect', { method: 'POST' });
       serialActive = false;
-      const comBtn = document.getElementById('comConnectBtn');
-      comBtn.textContent = 'Connect';
-      comBtn.className = 'btn btn-success';
-      comBtn.style.padding = '4px 12px'; comBtn.style.fontSize = '12px';
+      setConnectBtn('Connect', 'btn-success');
     }
     await fetch('/api/demo/start', { method: 'POST' });
     demoActive = true;
     btn.textContent = 'Stop Demo';
-    btn.className = 'btn btn-warning';
-    document.getElementById('connStatus').innerHTML = '<span class="status-dot dot-green"></span>Demo Mode';
-    document.getElementById('diagnoseBtn').disabled = false;
+    btn.className = 'btn btn-warning btn-sm';
+    setConnStatus(CONN_HTML.demo);
+    syncDiagnoseBtn();
     document.getElementById('footerStatus').textContent = 'Demo mode — synthetic ECG';
+    toast('Demo waveform started (synthetic ECG)', 'info');
   }
+}
+
+// ── Patient info persistence ───────────────────────────────
+const PATIENT_FIELDS = ['nameInput', 'ageInput', 'genderInput', 'symptomsInput', 'notesInput'];
+function savePatient() {
+  const data = {};
+  for (const id of PATIENT_FIELDS) data[id] = document.getElementById(id).value;
+  try { localStorage.setItem('ecg_patient', JSON.stringify(data)); } catch (e) {}
+}
+function loadPatient() {
+  try {
+    const data = JSON.parse(localStorage.getItem('ecg_patient') || '{}');
+    for (const id of PATIENT_FIELDS) {
+      if (data[id]) document.getElementById(id).value = data[id];
+    }
+  } catch (e) {}
+}
+PATIENT_FIELDS.forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('input', savePatient);
+});
+
+function collectPatientInfo() {
+  const info = {};
+  const name = document.getElementById('nameInput').value.trim();
+  if (name) info.name_or_id = name;
+  const age = document.getElementById('ageInput').value.trim();
+  if (age) info.age = parseInt(age) || age;
+  const gender = document.getElementById('genderInput').value;
+  if (gender) info.gender = gender.toLowerCase();
+  const symptoms = document.getElementById('symptomsInput').value.trim();
+  if (symptoms) info.symptoms_or_context = symptoms;
+  const notes = document.getElementById('notesInput').value.trim();
+  if (notes) info.clinical_notes = notes;
+  return Object.keys(info).length ? info : null;
 }
 
 // ── API Settings ───────────────────────────────────────────
 function toggleApiSettings() {
-  const el = document.getElementById('apiSettings');
-  el.classList.toggle('open');
+  document.getElementById('apiSettings').classList.toggle('open');
 }
 
 function onPresetChange() {
@@ -676,11 +1090,35 @@ function onPresetChange() {
   }
 }
 
-async function setupApi() {
+function setApiStatus(state, text) {
+  const dot = document.getElementById('apiDot');
+  const txt = document.getElementById('apiText');
+  const head = document.getElementById('apiStatus');
+  if (state === 'ok') {
+    dot.className = 'status-dot dot-green';
+    txt.textContent = text;
+    txt.className = 'api-text connected';
+    head.innerHTML = '<span class="status-dot dot-green"></span>API: Connected';
+  } else if (state === 'err') {
+    dot.className = 'status-dot dot-red';
+    txt.textContent = text;
+    txt.className = 'api-text error';
+    head.innerHTML = '<span class="status-dot dot-red"></span>API: Error';
+  } else {
+    dot.className = 'status-dot dot-gray';
+    txt.textContent = text;
+    txt.className = 'api-text';
+    head.innerHTML = '<span class="status-dot dot-gray"></span>API: Not configured';
+  }
+}
+
+async function setupApi(btn) {
   const apiKey = document.getElementById('apiKeyInput').value.trim();
   const apiUrl = document.getElementById('apiUrlInput').value.trim();
   const modelId = document.getElementById('modelIdInput').value.trim();
-  if (!apiKey || !apiUrl || !modelId) { alert('Please fill all fields'); return; }
+  if (!apiKey || !apiUrl || !modelId) { toast('Please fill API Key, URL and Model ID', 'warn'); return; }
+  btn.disabled = true;
+  btn.textContent = 'Testing…';
   try {
     const res = await fetch('/api/setup', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -688,26 +1126,30 @@ async function setupApi() {
     });
     const d = await res.json();
     if (d.status === 'connected') {
-      document.getElementById('apiDot').className = 'status-dot dot-green';
-      document.getElementById('apiText').textContent = 'API connected — ready for AI diagnosis';
-      document.getElementById('apiText').className = 'api-text connected';
-      document.getElementById('apiStatus').innerHTML = '<span class="status-dot dot-green"></span>API: Connected';
-      if (demoActive || ecgData.length > 100) document.getElementById('diagnoseBtn').disabled = false;
+      setApiStatus('ok', 'Connected — model ready for diagnosis');
+      toast('API connected successfully', 'success');
+      syncDiagnoseBtn();
+      document.getElementById('serviceMeta').innerHTML =
+        `Endpoint: <b>${apiUrl}</b><br>Model: <b>${modelId}</b>`;
     } else {
-      document.getElementById('apiDot').className = 'status-dot dot-red';
-      document.getElementById('apiText').textContent = 'API error: ' + (d.message || 'unknown');
-      document.getElementById('apiText').className = 'api-text error';
+      setApiStatus('err', 'Error: ' + (d.message || 'unknown'));
+      toast('API connection failed: ' + (d.message || 'unknown'), 'error');
     }
   } catch (e) {
-    alert('Connection failed: ' + e.message);
+    setApiStatus('err', 'Connection failed');
+    toast('Connection failed: ' + e.message, 'error');
   }
+  btn.disabled = false;
+  btn.textContent = 'Test & Connect';
 }
 
 // ── Diagnosis ──────────────────────────────────────────────
 async function runDiagnosis() {
   const btn = document.getElementById('diagnoseBtn');
+  analyzing = true;
   btn.disabled = true;
-  btn.textContent = 'Analyzing...';
+  btn.classList.add('analyzing');
+  btn.textContent = 'Analyzing…';
 
   const progressWrap = document.getElementById('progressWrap');
   const progressFill = document.getElementById('progressFill');
@@ -715,12 +1157,12 @@ async function runDiagnosis() {
   progressWrap.style.display = 'block';
 
   const steps = [
-    [10, 'Extracting ECG features...'],
-    [25, 'Detecting R-peaks & QRS morphology...'],
-    [40, 'Computing HRV & rhythm metrics...'],
-    [60, 'Sending data to AI model...'],
-    [75, 'AI analyzing cardiac patterns...'],
-    [90, 'Generating clinical report...'],
+    [12, 'Extracting ECG features…'],
+    [28, 'Detecting R-peaks & QRS morphology…'],
+    [45, 'Computing HRV & rhythm metrics…'],
+    [62, 'Sending structured data to AI model…'],
+    [78, 'AI analyzing cardiac patterns…'],
+    [92, 'Generating clinical report…'],
   ];
   let stepIdx = 0;
   const stepTimer = setInterval(() => {
@@ -728,66 +1170,76 @@ async function runDiagnosis() {
     const [pct, msg] = steps[stepIdx];
     progressFill.style.width = pct + '%';
     progressText.textContent = msg;
-    document.getElementById('overview').querySelector('.primary').textContent = msg;
+    const prim = document.getElementById('overview').querySelector('.primary');
+    if (prim) prim.textContent = msg;
     stepIdx++;
-  }, 600);
-
-  const patientInfo = {};
-  const age = document.getElementById('ageInput').value.trim();
-  if (age) patientInfo.age = parseInt(age);
-  const gender = document.getElementById('genderInput').value;
-  if (gender) patientInfo.gender = gender.toLowerCase();
-  const symptoms = document.getElementById('symptomsInput').value.trim();
-  if (symptoms) patientInfo.symptoms = symptoms;
+  }, 550);
 
   try {
     const res = await fetch('/api/diagnosis/run', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ patient_info: patientInfo || null })
+      body: JSON.stringify({ patient_info: collectPatientInfo() })
     });
     const d = await res.json();
     clearInterval(stepTimer);
     progressFill.style.width = '100%';
-    progressText.textContent = 'Diagnosis complete!';
-    setTimeout(() => { progressWrap.style.display = 'none'; }, 1500);
+    progressText.textContent = 'Diagnosis complete';
+    setTimeout(() => { progressWrap.style.display = 'none'; }, 1400);
 
     if (d.error) {
-      const codeBadge = d.error_code ? ` <span style="font-size:11px;color:var(--gray);border:1px solid var(--border);border-radius:4px;padding:1px 6px;margin-left:6px;">${d.error_code}</span>` : '';
-      const detail = d.detail ? `<div class="meta" style="margin-top:6px;font-size:11px;color:var(--gray);word-break:break-all;">${String(d.detail).substring(0, 300)}</div>` : '';
+      const codeBadge = d.error_code ? `<span class="err-code">${d.error_code}</span>` : '';
+      const detail = d.detail ? `<div class="err-detail">${String(d.detail).substring(0, 400)}</div>` : '';
       document.getElementById('overview').innerHTML =
-        `<span class="badge" style="background:var(--red);color:#fff;">Error</span>${codeBadge}
-         <div class="primary" style="color:var(--red);">${d.error}</div>${detail}`;
+        `<span class="badge" style="background:rgba(239,68,68,.15);color:#fca5a5;">ERROR</span>${codeBadge}
+         <div class="primary" style="color:#fca5a5;">${escapeHtml(d.error)}</div>${detail}`;
+      document.getElementById('reportTime').textContent = '';
+      document.getElementById('copyReportBtn').disabled = true;
+      toast(d.error, 'error', 6000);
     } else {
       displayDiagnosis(d);
+      toast('Diagnosis complete', 'success');
     }
   } catch (e) {
     clearInterval(stepTimer);
     progressWrap.style.display = 'none';
-    alert('Diagnosis failed: ' + e.message);
+    toast('Diagnosis request failed: ' + e.message, 'error', 6000);
   }
-  btn.disabled = false;
+  analyzing = false;
+  btn.classList.remove('analyzing');
   btn.textContent = 'Analyze ECG';
+  syncDiagnoseBtn();
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 function displayDiagnosis(d) {
+  lastDiagnosis = d;
   const sev = d.severity || 'unknown';
-  const sevColors = { normal: 'var(--green)', abnormal: 'var(--yellow)', critical: 'var(--red)', low: 'var(--green)' };
-  const conf = d.confidence ? (d.confidence * 100).toFixed(0) : '--';
-  document.getElementById('overview').innerHTML = `
-    <span class="badge" style="background:${sevColors[sev] || 'var(--gray)'};color:#fff;">${sev.toUpperCase()}</span>
-    <span style="float:right;font-size:12px;color:var(--gray);">Confidence ${conf}%</span>
-    <div class="primary">${d.primary_diagnosis || 'Unknown'}</div>
-    <div class="meta">${(d.timestamp || '').substring(0,19).replace('T',' ')} | ${d.model_used || 'AI'}</div>`;
+  const bc = SEV_BADGE[sev] || { bg: 'rgba(139,155,184,.15)', fg: '#8b9bb8' };
+  const conf = d.confidence ? (d.confidence * 100).toFixed(0) : null;
+  const confColor = conf == null ? '#8b9bb8' : (conf >= 70 ? '#22c55e' : conf >= 40 ? '#f59e0b' : '#ef4444');
 
-  const findings = (d.key_findings || []).map(f => '• ' + f).join('\n') || 'No findings.';
-  document.getElementById('findingsText').textContent = findings;
+  document.getElementById('overview').innerHTML = `
+    <span class="badge" style="background:${bc.bg};color:${bc.fg};">${escapeHtml(sev.toUpperCase())}</span>
+    ${conf != null ? `<span class="conf-row" style="display:inline-flex;align-items:center;gap:8px;margin-left:10px;vertical-align:middle;">
+      <span class="conf-label">CONFIDENCE</span>
+      <span class="conf-bar" style="display:inline-block;width:90px;"><span class="conf-fill" style="width:${conf}%;background:${confColor};display:block;height:100%;"></span></span>
+      <span class="conf-label" style="color:${confColor};">${conf}%</span>
+    </span>` : ''}
+    <div class="primary">${escapeHtml(d.primary_diagnosis || 'Unknown')}</div>
+    <div class="meta">${escapeHtml((d.timestamp || '').substring(0,19).replace('T',' '))} · ${escapeHtml(d.model_used || 'AI')}</div>`;
+
+  document.getElementById('findingsText').textContent =
+    (d.key_findings || []).map(f => '• ' + f).join('\n') || 'No findings.';
 
   const rec = d.recommendations || {};
-  const actions = (rec.immediate_actions || []).map(a => '• ' + a).join('\n') || 'No actions.';
-  document.getElementById('actionsText').textContent = actions;
+  document.getElementById('actionsText').textContent =
+    (rec.immediate_actions || []).map(a => '• ' + a).join('\n') || 'No actions.';
 
-  const followUp = [...(rec.follow_up || []), ...(rec.lifestyle || [])].map(f => '• ' + f).join('\n') || 'No guidance.';
-  document.getElementById('followupText').textContent = followUp;
+  document.getElementById('followupText').textContent =
+    [...(rec.follow_up || []), ...(rec.lifestyle || [])].map(f => '• ' + f).join('\n') || 'No guidance.';
 
   const notes = [];
   if (d.secondary_conditions?.length) notes.push('Secondary:\n' + d.secondary_conditions.map(s => '• ' + s).join('\n'));
@@ -800,11 +1252,48 @@ function displayDiagnosis(d) {
   if (d.clinical_disclaimer) notes.push('\n' + d.clinical_disclaimer);
   document.getElementById('notesText').textContent = notes.join('\n\n') || 'No notes.';
 
-  document.getElementById('footerStatus').textContent = `Last diagnosis: ${sev} (${conf}%)`;
+  const ts = (d.timestamp || new Date().toISOString()).substring(0,19).replace('T',' ');
+  document.getElementById('reportTime').textContent = ts;
+  document.getElementById('copyReportBtn').disabled = false;
+  document.getElementById('footerStatus').textContent = `Last diagnosis: ${sev}${conf != null ? ` (${conf}%)` : ''}`;
 }
+
+function copyReport() {
+  if (!lastDiagnosis) return;
+  const d = lastDiagnosis;
+  const parts = [
+    `ECG AI Diagnosis Report — ${d.timestamp || ''}`,
+    `Severity: ${d.severity || 'unknown'} | Confidence: ${d.confidence != null ? (d.confidence*100).toFixed(0)+'%' : 'n/a'} | Model: ${d.model_used || 'n/a'}`,
+    '',
+    `Primary: ${d.primary_diagnosis || ''}`,
+    '',
+    'Key Findings:', ...(d.key_findings || []).map(f => '- ' + f),
+    '',
+    'Immediate Actions:', ...((d.recommendations||{}).immediate_actions || []).map(a => '- ' + a),
+    '',
+    'Follow-up:', ...((d.recommendations||{}).follow_up || []).map(f => '- ' + f),
+    'Lifestyle:', ...((d.recommendations||{}).lifestyle || []).map(f => '- ' + f),
+    '',
+    d.clinical_disclaimer ? 'Disclaimer: ' + d.clinical_disclaimer : '',
+  ];
+  const text = parts.filter(p => p !== undefined).join('\n');
+  navigator.clipboard.writeText(text).then(
+    () => toast('Report copied to clipboard', 'success'),
+    () => toast('Clipboard copy failed', 'error')
+  );
+}
+
+// ── Clock ──────────────────────────────────────────────────
+function tickClock() {
+  const el = document.getElementById('clock');
+  if (el) el.textContent = new Date().toLocaleTimeString('en-GB');
+}
+setInterval(tickClock, 1000);
+tickClock();
 
 // ── Init ───────────────────────────────────────────────────
 async function init() {
+  loadPatient();
   try {
     const res = await fetch('/api/config');
     const d = await res.json();
@@ -821,12 +1310,10 @@ async function init() {
     if (d.model_id) document.getElementById('modelIdInput').value = d.model_id;
     sel.value = 'Custom / Local';
 
-    // Auto-connected from .env?
     if (d.api_key && d.api_url && d.model_id) {
-      document.getElementById('apiDot').className = 'status-dot dot-green';
-      document.getElementById('apiText').textContent = 'API connected — ready for AI diagnosis';
-      document.getElementById('apiText').className = 'api-text connected';
-      document.getElementById('apiStatus').innerHTML = '<span class="status-dot dot-green"></span>API: Connected';
+      setApiStatus('ok', `Connected — ${d.model_id}`);
+      document.getElementById('serviceMeta').innerHTML =
+        `Endpoint: <b>${d.api_url}</b><br>Model: <b>${d.model_id}</b><br>Configured via environment / .env`;
     }
   } catch (e) { console.error('Init failed:', e); }
 }

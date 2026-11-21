@@ -16,6 +16,42 @@ Real-time ECG visualization and AI-assisted interpretation for **ESP32 + ADS1292
 - **Bilingual clinical UI** — Chinese-primary labels with structured AI reports
 - **Multi-model LLM** — OpenAI-compatible APIs (Gemini, GPT-4o, DeepSeek, Qwen, local)
 
+## Signal Acquisition & Heart-Rate Principles
+
+### Hardware chain
+
+| Stage | Detail |
+|-------|--------|
+| Front-end IC | Texas Instruments **ADS1292R**: 24-bit ΔΣ ADC, PGA gain 6, VREF 2.4 V |
+| ADC rate | CONFIG1 DR field: 125–8000 SPS; typical firmware **500 SPS** |
+| UART stream rate | May differ from ADC rate (firmware decimation, e.g. 500 SPS → 50 Hz CSV). **HR math must use the serial stream rate, not the ADC rate.** |
+| Scaling | ProtoCentral sends `int16 = 24-bit code >> 8` ≈ **12.2 µV/count**; `µV = Code × 2·VREF / (Gain·2²⁴) × 10⁶` |
+| Protocol | `DATA,<timestamp_ms>,<ecg>,<resp>,<hr>,<status>` @ 57600 baud; plain numeric lines also accepted |
+
+### Sample-rate confirmation & auto-adjust
+
+- **Configured**: default 500 Hz (`DEFAULT_SAMPLE_RATE`), overridable per firmware profile.
+- **Auto mode** (Web default; `ECG_SAMPLE_RATE_MODE=configured` to disable): `SampleRateTracker` estimates the true stream rate from device `timestamp_ms` deltas and/or packet arrival timing, then snaps to {50, 125, 250, 500, 1000} Hz.
+- **HR cross-check** (`correct_sample_rate_from_hr`): when firmware HR and R-peak HR disagree by ~2×/½×, the rate is inferred wrong, corrected ×2 or ÷2, snapped, and peaks re-detected.
+
+### Signal chain (`ecg_signal.py`)
+
+1. Raw counts → µV via profile `uv_per_count`.
+2. Baseline removal (~0.6 s moving average).
+3. FFT bandpass **0.5–40 Hz** with reflect padding.
+4. **Mains detection** (50/60 Hz): spectral peak >6× local median **and** amplitude ≥18 µV (rejects ~12 µV QRS-harmonic lines); hit ⇒ `mains_interference_hz` set, quality capped at Fair.
+5. `hf_noise_ratio`: >40 Hz spectral power share for LLM quality context.
+
+### Heart-rate detection & calculation
+
+1. **R peaks** on the filtered trace: baseline-removed, polarity-agnostic envelope, amplitude-ranked NMS with **0.42 s refractory** (suppresses T/P double counts).
+2. **HR** = `60 / mean(RR)`; RR coefficient of variation → rhythm grade.
+3. **Overcount guards**: harmonic artifact train (envelope short-period ratio 1.7–2.5) or T-wave double-count (broad-peak fraction 0.25–0.75) ⇒ fallback to **<3 Hz slow-component autocorrelation** (`heart_rate_method=slow_component`).
+4. **HR zones**: <50 severe brady / 50–60 relative / 60–100 normal / 100–120 mild tachy / 120–150 tachy / >150 severe.
+5. **Source fusion**: device `hr` field > computed R-peak HR > fused mean; `heart_rate_source` records which was used.
+
+The LLM receives all structured metrics plus a filtered waveform snippet and is instructed to adopt the system HR rather than recompute it.
+
 ## Quick Start
 
 ```bash

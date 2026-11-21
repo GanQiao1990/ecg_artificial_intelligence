@@ -150,3 +150,79 @@ Real CSV check — `data/ecg_measurement_woman23_normal.csv` (23F, 正常心脏)
 5. FFT brick-wall ringing: mitigated by reflect padding; QC metrics remain on raw.
 6. Open: 10 s window at ~52 bpm = ~9 cycles — estimate uncertainty ±10-15%;
    honest "Irregular"/"Fair" labels carry that uncertainty to the LLM.
+
+---
+
+## 2026-11-21 — Frontend professional redesign + LLM robustness fixes
+
+### Assumptions (pre-execution)
+- A1: classmate test happens in a desktop browser on Windows → keep single-file
+  vanilla HTML/CSS/JS, no build step, dark medical-monitor theme acceptable.
+- A2: backend already exposes all needed metric fields; only additive changes.
+- A3: alert()/native dialogs read as unprofessional → replace with toast system.
+
+### Changes
+- `templates/index.html` rewritten: sticky header w/ live clock + status pills
+  (conn/demo/API), ECG monitor card (chips, scrollable canvas, signal-alert
+  strip), 3-col band (Live Vitals hero HR + zone chip + 6 tiles / Patient form
+  w/ localStorage persistence / AI Service card), full-width AI Diagnosis card
+  (severity badge + confidence bar + 2x2 section grid + disclaimer), toasts,
+  copy-report button, inline SVG favicon (kills 404).
+- `web_app.py` /api/ecg/stream: added heart_rate_zone, *_color_token,
+  rr_variability passthrough.
+- `ecg_signal.py detect_mains_interference`: added MIN_MAINS_AMP_UV=18 floor —
+  demo QRS harmonic splatter produced a narrow ~11.9µV line at 60 Hz that
+  false-triggered mains detection (quality capped Fair on clean signal).
+- `llm_diagnosis.py`: max_tokens 2048→8192 default + ECG_LLM_MAX_TOKENS env;
+  auto-retry once at 2x budget (cap 32768) on finish_reason=length + empty
+  content; new `truncated_response` error code; request block refactored into
+  _build_payload/_post_chat/_extract_content.
+- `app_config.py`: ECG_LLM_MAX_TOKENS + ECG_LLM_TIMEOUT_SEC env parsing.
+- `web_app.py setup_api`: max_tokens/timeout_sec passthrough; auto-connect
+  passes cfg values; truncated_response→502.
+- `.env` / `.env.example`: documented both new vars; .env sets
+  ECG_LLM_MAX_TOKENS=16384 + ECG_LLM_TIMEOUT_SEC=180 for glm-5.3-flash.
+
+### Measured results
+- Demo metrics: HR 72.0, zone 正常范围, Excellent, Regular, R-peaks — clean.
+- Mains detection post-fix: demo+EMG40 → None (was 60.0 FP); 50Hz@20/50µV →
+  50.0; 60Hz@50µV → 60.0; 15µV below floor → None (bandpass covers it anyway).
+- Live UI verify (Playwright): conn pill "Demo Mode" on fresh load, Analyze
+  enabled, vitals populate, alerts strip hidden on clean signal, API shows
+  "Connected — glm-5.3-flash".
+- Diagnosis run 1 (max_tokens 2048): empty_response — provider returned
+  finish_reason=length, content="", reasoning_content truncated mid-sentence.
+  UI rendered ERROR badge + empty_response code + friendly msg + raw detail.
+- Diagnosis run 2 (8192 default): timeout @60s — reasoning model too slow.
+- Fix: ECG_LLM_MAX_TOKENS=16384 + ECG_LLM_TIMEOUT_SEC=180 in .env.
+
+### Adversarial review
+1. Amplitude floor 18µV vs demo harmonic 11.9µV — margin 1.5x; real mains
+   <18µV missed but 0.5-40Hz bandpass removes it regardless → flag-only loss.
+2. hf_noise_ratio stays a displayed metric but UI alerts only >0.45 — clean
+   demo measures 0.28 (QRS morphology splatter, not noise) so threshold avoids
+   false alarms; pure-noise signals (~0.85) still trip quality=Poor upstream.
+3. Token retry doubles cost only on actual truncation; non-reasoning models
+   unaffected (finish_reason=stop → no retry).
+4. connStatus now derived server-state each poll — watchdog error persists
+   correctly; manual connect failure still toasts (serial_error only set by
+   watchdog path).
+5. analyzing flag prevents poll-driven re-enable of Analyze mid-request.
+
+---
+
+## 2026-11-21 (cont.) — Web sample-rate auto mode + principles docs
+
+- web_app.py: SampleRateTracker wired in (was Tkinter-only). effective_sample_rate()
+  returns configured rate in demo/disconnected, else tracker.effective_rate(
+  prefer_auto) — auto is default via ECG_SAMPLE_RATE_MODE (auto|configured).
+- _serial_loop now feeds tracker.on_sample(timestamp_ms) per line and captures
+  parsed.device_hr_bpm → last_device_hr_bpm → passed to compute_ecg_metrics
+  (enables device-HR fusion + 2x sample-rate cross-correction on serial too).
+- connect_serial resets tracker + device HR; stream exposes sample_rate_mode,
+  sample_rate_configured, device_hr_bpm, sample_rate_correction.
+- Verified: tracker 20ms timestamps → 50.0 Hz; demo stream rate=500 mode=auto,
+  device_hr=72 fused, quality Excellent.
+- README.md + README_CN.md: new "Signal Acquisition & Heart-Rate Principles"
+  section — ADS1292R chain, stream-vs-ADC rate, tracker/snap/cross-check,
+  filter chain, R-peak/NMS/refractory, overcount guards, HR zones, LLM fields.

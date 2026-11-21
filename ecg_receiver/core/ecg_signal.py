@@ -8,6 +8,7 @@ and beat detection so UI and AI diagnosis share one source of truth.
 
 from __future__ import annotations
 
+import math
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -234,10 +235,16 @@ def filter_ecg_band(
     return out[pad : pad + n] if pad else out
 
 
+MIN_MAINS_AMP_UV = 18.0
+
+
 def detect_mains_interference(data_uv: np.ndarray, sample_rate: float) -> Optional[float]:
     """
     Return 50.0/60.0 when a narrowband mains spike dominates the spectrum,
-    else None. Compares each mains bin against neighbouring spectral median.
+    else None. Requires BOTH a sharp spectral peak (vs local median) and an
+    absolute amplitude above MIN_MAINS_AMP_UV — QRS harmonic splatter from a
+    periodic beat train can produce a narrow ~12 µV line near 60 Hz that is
+    not mains interference.
     """
     n = data_uv.size
     if n < int(sample_rate * 4):
@@ -256,7 +263,10 @@ def detect_mains_interference(data_uv: np.ndarray, sample_rate: float) -> Option
         neigh = float(
             np.median(np.concatenate([power[i - 8 : i - 3], power[i + 4 : i + 9]]))
         )
-        if neigh > 0 and peak > 6.0 * neigh:
+        if neigh <= 0 or peak <= 6.0 * neigh:
+            continue
+        amp_uv = 2.0 * math.sqrt(float(power[i - 1 : i + 2].sum())) / n
+        if amp_uv >= MIN_MAINS_AMP_UV:
             return hz
     return None
 
