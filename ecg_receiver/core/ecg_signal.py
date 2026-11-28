@@ -546,6 +546,316 @@ def _slow_component_rate(
     return None, None, peaks, {"estimator": "none", "peak_count": len(peaks)}
 
 
+_QRST_FINDINGS_CN = {
+    "wide_qrs": "QRS 增宽（≥120 ms）",
+    "borderline_qrs_width": "QRS 时限接近上限（110–120 ms）",
+    "st_positive_deviation": "ST 段正向偏移（相对显示极性）",
+    "st_negative_deviation": "ST 段负向偏移（相对显示极性）",
+    "borderline_st_deviation": "ST 段轻中度偏移（50–100 µV）",
+    "t_wave_discordance": "T 波方向与主 QRS 方向相反",
+    "low_qrs_amplitude": "QRS 振幅偏低，需同时确认电极接触",
+}
+
+
+def _qrst_unavailable_result(reason: str) -> Dict[str, Any]:
+    return {
+        "qrst_status": "unavailable",
+        "qrst_status_label": "QRST 无法评估",
+        "qrst_color_token": "gray",
+        "qrst_confidence": "low",
+        "qrst_scope": "unavailable",
+        "qrst_reason": reason,
+        "qrst_findings": [],
+        "qrst_findings_cn": [],
+        "qrs_duration_ms": None,
+        "qrs_amplitude_uv": None,
+        "st_deviation_uv": None,
+        "t_wave_polarity": "unknown",
+        "qrst_beats_used": 0,
+    }
+
+
+def _measure_qrst_beat(
+    segment: np.ndarray,
+    pre_samples: int,
+    sample_rate: float,
+    t_search_end_sec: float,
+) -> Optional[Dict[str, float]]:
+    """Heuristic single-beat QRST measurements relative to the PQ baseline."""
+    fs = float(sample_rate)
+    if segment.size < pre_samples + int(0.20 * fs):
+        return None
+
+    r_search = int(0.02 * fs)
+    rlo = max(0, pre_samples - r_search)
+    rhi = min(segment.size, pre_samples + r_search + 1)
+    rwin = segment[rlo:rhi]
+    if rwin.size == 0:
+        return None
+    r_offset = int(np.argmax(np.abs(rwin)))
+    r_pos = rlo + r_offset
+
+    # PQ/PR reference window. It is deliberately earlier than the immediate
+    # pre-QRS region so a wide QRS onset does not become the baseline.
+    b0 = pre_samples - int(0.13 * fs)
+    b1 = pre_samples - int(0.08 * fs)
+    if b0 < 0 or b1 <= b0:
+        return None
+    baseline = float(np.median(segment[b0:b1]))
+    x = segment.astype(np.float64) - baseline
+    signed_r = float(x[r_pos])
+    r_amp = abs(signed_r)
+    if r_amp < 20.0:
+        return None
+
+    threshold = max(25.0, 0.15 * r_amp)
+    qlo = max(0, r_pos - int(0.16 * fs))
+    qhi = min(x.size, r_pos + int(0.16 * fs))
+    if qhi <= qlo + 3:
+        return None
+    active = np.abs(x[qlo:qhi]) >= threshold
+
+    # Fill very short baseline crossings inside the QRS (R-to-S transition).
+    max_gap = max(1, int(0.008 * fs))
+    i = 0
+    while i < active.size:
+        if active[i]:
+            i += 1
+            continue
+        j = i
+        while j < active.size and not active[j]:
+            j += 1
+        if i > 0 and j < active.size and j - i <= max_gap:
+            active[i:j] = True
+        i = j
+
+    rp = r_pos - qlo
+    if not (0 <= rp < active.size):
+        return None
+    if not active[rp]:
+        active_indices = np.flatnonzero(active)
+        if active_indices.size == 0:
+            return None
+        rp = int(active_indices[np.argmin(np.abs(active_indices - rp))])
+
+    start = rp
+    while start > 0 and active[start - 1]:
+        start -= 1
+    end = rp
+    while end < active.size - 1 and active[end + 1]:
+        end += 1
+    qrs_onset = qlo + start
+    qrs_end = qlo + end
+    qrs_width_ms = (qrs_end - qrs_onset + 1) / fs * 1000.0
+    if qrs_width_ms < 15.0 or qrs_width_ms > 260.0:
+        return None
+
+    # ST level at J+80 ms, median over ±5 ms to reduce noise sensitivity.
+    st_center = qrs_end + int(0.08 * fs)
+    st_half = max(1, int(0.005 * fs))
+    st_deviation: Optional[float] = None
+    if st_center + st_half < x.size:
+        st_deviation = float(
+            np.median(x[st_center - st_half : st_center + st_half + 1])
+        )
+
+    # T wave: strongest broad deflection after the early ST interval. Light
+    # smoothing prevents single-sample noise from determining polarity.
+    t0 = max(qrs_end + int(0.04 * fs), r_pos + int(0.07 * fs))
+    t1 = min(x.size, qrs_end + int(t_search_end_sec * fs))
+    t_value: Optional[float] = None
+    t_amplitude: Optional[float] = None
+    t_pos: Optional[int] = None
+    if t1 > t0 + max(5, int(0.02 * fs)):
+        smooth_n = max(1, int(0.006 * fs))
+        kernel = np.ones(smooth_n, dtype=np.float64) / smooth_n
+        smooth = np.convolve(x, kernel, mode="same")
+        twin = smooth[t0:t1]
+        ti = int(np.argmax(np.abs(twin)))
+        t_value = float(twin[ti])
+        t_amplitude = abs(t_value)
+        t_pos = t0 + ti
+
+    return {
+        "baseline": baseline,
+        "signed_r": signed_r,
+        "qrs_amplitude_uv": r_amp,
+        "qrs_width_ms": float(qrs_width_ms),
+        "st_deviation_uv": st_deviation if st_deviation is not None else float("nan"),
+        "st_pos": float(st_center),
+        "t_pos": float(t_pos) if t_pos is not None else float("nan"),
+        "t_value_uv": t_value if t_value is not None else float("nan"),
+        "t_amplitude_uv": t_amplitude if t_amplitude is not None else float("nan"),
+    }
+
+
+def _analyze_qrst_morphology(
+    filtered_uv: np.ndarray,
+    sample_rate: float,
+    peaks: List[int],
+    rate_method: str,
+    quality_label: str,
+    quality_token: str,
+    rr_cv: Optional[float],
+) -> Dict[str, Any]:
+    """
+    Conservative single-lead QRST morphology screening.
+
+    This is deliberately a screening layer, not a diagnostic 12-lead interpreter.
+    It reports robust median measurements and simple warnings only when ordinary
+    QRS peak evidence is trustworthy.
+    """
+    if rate_method != "qrs_peaks":
+        return _qrst_unavailable_result("artifact_or_non_qrs_rate_method")
+    if quality_label in {"No signal", "Poor"} or quality_token in {"gray", "red"}:
+        return _qrst_unavailable_result("insufficient_signal_quality")
+    if len(peaks) < 4:
+        return _qrst_unavailable_result("insufficient_qrs_beats")
+
+    fs = float(sample_rate)
+    pre = int(0.22 * fs)
+    post = int(0.48 * fs)
+    rr = np.diff(np.asarray(peaks, dtype=np.float64)) / fs
+    valid_rr = rr[(rr >= RR_MIN_SEC) & (rr <= RR_MAX_SEC)]
+    median_rr = float(np.median(valid_rr)) if valid_rr.size else 0.85
+    t_search_end = min(0.36, max(0.16, 0.45 * median_rr))
+
+    measurements: List[Dict[str, float]] = []
+    for peak in peaks:
+        if peak - pre < 0 or peak + post >= filtered_uv.size:
+            continue
+        measured = _measure_qrst_beat(
+            filtered_uv[peak - pre : peak + post], pre, fs, t_search_end
+        )
+        if measured is not None:
+            measurements.append(measured)
+
+    if len(measurements) < 3:
+        return _qrst_unavailable_result("insufficient_complete_beats")
+
+    sign_sum = sum(1 if m["signed_r"] >= 0 else -1 for m in measurements)
+    dominant_sign = 1.0 if sign_sum >= 0 else -1.0
+    dominant = [
+        m for m in measurements if (m["signed_r"] >= 0) == (dominant_sign >= 0)
+    ]
+    if len(dominant) < 3:
+        return _qrst_unavailable_result("inconsistent_qrs_polarity")
+
+    widths = np.asarray([m["qrs_width_ms"] for m in dominant], dtype=np.float64)
+    amps = np.asarray([m["qrs_amplitude_uv"] for m in dominant], dtype=np.float64)
+    # A fixed J+80 ms ST point is meaningful only if the T wave is still far
+    # enough away. At high heart rates the T wave can occupy that point; treating
+    # the T upstroke as ST shift produced false positives, so those beats are
+    # excluded rather than interpreted.
+    st_valid: List[float] = []
+    min_st_t_gap_samples = int(0.06 * fs)
+    for m in dominant:
+        st_val = m["st_deviation_uv"]
+        if not np.isfinite(st_val):
+            continue
+        if not np.isfinite(m["t_pos"]) or not np.isfinite(m["st_pos"]):
+            continue
+        if m["t_pos"] - m["st_pos"] >= min_st_t_gap_samples:
+            st_valid.append(float(st_val))
+
+    t_vals = np.asarray([m["t_value_uv"] for m in dominant], dtype=np.float64)
+    t_amps = np.asarray([m["t_amplitude_uv"] for m in dominant], dtype=np.float64)
+
+    width_med = float(np.median(widths))
+    amp_med = float(np.median(amps))
+    st_med = float(np.median(st_valid)) if len(st_valid) >= 3 else None
+
+    t_votes: List[int] = []
+    # At short RR intervals the T wave, next P wave, and terminal QRS recovery
+    # overlap. Polarity inversion in that crowded segment is not reliable
+    # morphology evidence on a single lead, so it is reported as uncertain.
+    if median_rr >= 0.60:
+        for m, t_val, t_amp in zip(dominant, t_vals, t_amps):
+            if not np.isfinite(t_val) or not np.isfinite(t_amp):
+                continue
+            min_t_amp = max(40.0, 0.12 * m["qrs_amplitude_uv"])
+            if t_amp < min_t_amp:
+                continue
+            t_votes.append(1 if np.sign(t_val) == np.sign(m["signed_r"]) else -1)
+    if len(t_votes) >= 2:
+        positive_votes = sum(1 for vote in t_votes if vote > 0)
+        negative_votes = len(t_votes) - positive_votes
+        required = max(1, math.ceil(0.6 * len(t_votes)))
+        if positive_votes >= required:
+            t_polarity = "concordant"
+        elif negative_votes >= required:
+            t_polarity = "discordant"
+        else:
+            t_polarity = "mixed"
+    else:
+        t_polarity = "uncertain"
+
+    st_assessed = st_med is not None
+    t_assessed = t_polarity in {"concordant", "discordant", "mixed"}
+    qrst_scope = "full" if st_assessed and t_assessed else "limited"
+
+    confidence = "high" if quality_token == "green" and len(dominant) >= 5 else "medium"
+    if rr_cv is not None and rr_cv >= 0.16 and confidence == "high":
+        confidence = "medium"
+    if (median_rr < 0.60 or qrst_scope == "limited") and confidence == "high":
+        confidence = "medium"
+
+    abnormal: List[str] = []
+    borderline: List[str] = []
+    if width_med >= 120.0:
+        abnormal.append("wide_qrs")
+    elif width_med >= 110.0:
+        borderline.append("borderline_qrs_width")
+
+    if st_med is not None:
+        abs_st = abs(st_med)
+        if abs_st >= 100.0:
+            abnormal.append(
+                "st_positive_deviation" if st_med >= 0 else "st_negative_deviation"
+            )
+        elif abs_st >= 50.0:
+            borderline.append("borderline_st_deviation")
+
+    if t_polarity == "discordant" and width_med < 120.0:
+        borderline.append("t_wave_discordance")
+    if amp_med < 250.0:
+        borderline.append("low_qrs_amplitude")
+
+    if abnormal:
+        status = "abnormal"
+        status_label = "QRST 形态异常线索"
+        color = "red"
+    elif borderline:
+        status = "borderline"
+        status_label = "QRST 形态边界/需复查"
+        color = "yellow"
+    else:
+        status = "normal"
+        status_label = (
+            "未见明显 QRST 形态异常"
+            if qrst_scope == "full"
+            else "未见明显异常（可评估部分）"
+        )
+        color = "green"
+
+    findings = abnormal + borderline
+    return {
+        "qrst_status": status,
+        "qrst_status_label": status_label,
+        "qrst_color_token": color,
+        "qrst_confidence": confidence,
+        "qrst_scope": qrst_scope,
+        "qrst_reason": None,
+        "qrst_findings": findings,
+        "qrst_findings_cn": [_QRST_FINDINGS_CN[c] for c in findings],
+        "qrs_duration_ms": round(width_med, 1),
+        "qrs_amplitude_uv": round(amp_med, 1),
+        "st_deviation_uv": round(st_med, 1) if st_med is not None else None,
+        "t_wave_polarity": t_polarity,
+        "qrst_beats_used": len(dominant),
+    }
+
+
 def _broad_peak_fraction(
     envelope: np.ndarray,
     peaks: List[int],
@@ -710,6 +1020,7 @@ def compute_ecg_metrics(
             "heart_rate_abnormal": False,
             "mains_interference_hz": None,
             "hf_noise_ratio": 0.0,
+            **_qrst_unavailable_result("no_data"),
         }
 
     # R-peak detection runs on the filtered (clean-band) trace; amplitude QC
@@ -833,6 +1144,15 @@ def compute_ecg_metrics(
     elif (harmonic_corrected or mains_hz is not None) and quality_token == "green":
         quality_label, quality_token = "Fair", "yellow"
 
+    qrst_metrics = _analyze_qrst_morphology(
+        filtered_uv,
+        sample_rate,
+        peaks,
+        rate_method,
+        quality_label,
+        quality_token,
+        rr_cv,
+    )
     hr_zone_key, hr_zone_label, _, hr_abnormal = hr_zone(final_bpm)
 
     return {
@@ -870,6 +1190,7 @@ def compute_ecg_metrics(
         "computed_hr_bpm": computed_bpm,
         "device_hr_bpm": device_hr_bpm,
         "sample_rate_correction": rate_correction_note,
+        **qrst_metrics,
     }
 
 
@@ -909,6 +1230,18 @@ def preprocess_for_llm(
         "heart_rate_confidence": metrics.get("heart_rate_confidence"),
         "heart_rate_acf_correlation": metrics.get("heart_rate_acf_correlation"),
         "artifact_period_sec": metrics.get("artifact_period_sec"),
+        "qrst_status": metrics.get("qrst_status"),
+        "qrst_status_label": metrics.get("qrst_status_label"),
+        "qrst_confidence": metrics.get("qrst_confidence"),
+        "qrst_scope": metrics.get("qrst_scope"),
+        "qrst_reason": metrics.get("qrst_reason"),
+        "qrst_findings": metrics.get("qrst_findings"),
+        "qrst_findings_cn": metrics.get("qrst_findings_cn"),
+        "qrs_duration_ms": metrics.get("qrs_duration_ms"),
+        "qrs_amplitude_uv": metrics.get("qrs_amplitude_uv"),
+        "st_deviation_uv": metrics.get("st_deviation_uv"),
+        "t_wave_polarity": metrics.get("t_wave_polarity"),
+        "qrst_beats_used": metrics.get("qrst_beats_used"),
         "heart_rate_zone": metrics.get("heart_rate_zone", "unknown"),
         "heart_rate_zone_label": metrics.get("heart_rate_zone_label", "未知"),
         "heart_rate_abnormal": metrics.get("heart_rate_abnormal", False),
@@ -931,6 +1264,8 @@ def preprocess_for_llm(
             )
             + ". Heart rate normally uses firmware agreement or R-peak detection "
             f"at {metrics['sample_rate_hz']:.0f} Hz with {REFRACTORY_SEC:.2f}s refractory period."
+            + " QRST output is a conservative single-lead morphology screen, not a "
+            + "12-lead diagnostic interpretation."
             + (
                 " Peak-based estimate showed harmonic overcount on a periodic artifact "
                 "train; rate falls back to the 0.5-3 Hz cardiac component and "

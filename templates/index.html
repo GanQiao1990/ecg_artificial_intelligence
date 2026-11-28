@@ -489,6 +489,7 @@ body {
           <div class="vtile"><div class="vlabel">Sample Rate</div><div class="vvalue" id="statFs">--</div></div>
           <div class="vtile"><div class="vlabel">P-P Amp</div><div class="vvalue" id="statPP">--</div></div>
           <div class="vtile"><div class="vlabel">QRS / Window</div><div class="vvalue" id="statQrs">--</div><div class="vsub" id="statQrsSub"></div></div>
+          <div class="vtile"><div class="vlabel">QRST Screen</div><div class="vvalue sm" id="statQrst">--</div><div class="vsub" id="statQrstSub"></div></div>
         </div>
       </section>
 
@@ -843,6 +844,16 @@ function updateStats(m) {
   setVal('statQrs', qrsTxt);
   document.getElementById('statQrsSub').textContent = timeWindow ? `${timeWindow}s window` : '';
 
+  const qrstTok = m.qrst_color_token || 'gray';
+  const qrstShort = m.qrst_status === 'normal' ? 'Normal'
+    : m.qrst_status === 'borderline' ? 'Borderline'
+    : m.qrst_status === 'abnormal' ? 'Abnormal'
+    : 'N/A';
+  setVal('statQrst', qrstShort, TOKEN_COLOR[qrstTok] || null);
+  document.getElementById('statQrstSub').textContent = m.qrs_duration_ms != null
+    ? `QRS ${m.qrs_duration_ms.toFixed(0)} ms · ${m.qrst_scope || ''} · ${m.qrst_confidence || ''}`
+    : (m.qrst_status === 'unavailable' ? 'not assessable' : '');
+
   // Signal-quality alert strip
   renderSignalAlerts(m);
 
@@ -863,6 +874,10 @@ function renderSignalAlerts(m) {
     const period = m.artifact_period_sec ? ` (artifact ~${(1 / m.artifact_period_sec).toFixed(1)} Hz)` : '';
     const conf = m.heart_rate_confidence ? `, ${m.heart_rate_confidence} confidence` : '';
     alerts.push({ cls: 'warn', text: `HR estimated from low-frequency component — periodic artifact in QRS band${period}${conf}` });
+  }
+  if (m.qrst_status === 'abnormal' || m.qrst_status === 'borderline') {
+    const detail = Array.isArray(m.qrst_findings_cn) && m.qrst_findings_cn.length ? ` — ${m.qrst_findings_cn.join('；')}` : '';
+    alerts.push({ cls: m.qrst_status === 'abnormal' ? 'warn' : 'info', text: `QRST screening: ${m.qrst_status_label}${detail}` });
   }
   if (m.hf_noise_ratio != null && m.hf_noise_ratio > 0.45) {
     alerts.push({ cls: 'info', text: `Elevated high-frequency noise (${(m.hf_noise_ratio * 100).toFixed(0)}%)` });

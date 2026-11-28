@@ -389,3 +389,138 @@ Verification:
 6. **Sample-rate truth is not independently established by these CSVs.** They
    all state 500 Hz but contain no separate clock reference validating that
    value; all absolute rates scale with any sample-rate error.
+
+---
+
+## 2026-11-28 — QRST morphology screening and Chinese documentation
+
+### Deeper-question check (Rule 1)
+Recurring theme: the user asks the system to move from heart-rate numbers toward
+clinically meaningful ECG interpretation while keeping Chinese documentation
+accurate. Candidate deeper question: **can this single-lead acquisition pipeline
+provide conservative morphology screening without pretending to be a diagnostic
+12-lead ECG?** This task is an instance of that deeper question, so the safety
+boundary must be designed before implementation: QRST output may be a screening
+flag and measurement summary, not a diagnosis.
+
+### User decision
+Asked whether to provide documentation only, implementation only, or both; user
+selected **Both** and then restated: check whether ECG QRST waves are abnormal
+and add Chinese README documentation.
+
+### Assumptions (pre-execution)
+- A1: QRST screening must be conservative because the device is single-lead,
+  electrode placement/polarity are variable, and the measured real recordings are
+  artifact-dominated.
+- A2: The screening layer should use existing filtered µV signals and R peaks;
+  it must not run meaningful morphology interpretation when the artifact fallback
+  is active or signal quality is inadequate.
+- A3: Useful conservative measurements are median QRS duration, QRS amplitude,
+  ST-segment deviation at a fixed post-J offset, and T-wave polarity relative to
+  the dominant QRS direction. QT interval measurement is not yet reliable enough
+  from the current peak-only pipeline and should remain unimplemented rather than
+  overclaimed.
+- A4: QRS duration ≥120 ms can be a wide-QRS screening warning; absolute ST
+  deviation ≥100 µV can be a significant screening warning; 50–100 µV is a
+  borderline/repeat-measurement warning. These are screening thresholds, not
+  diagnostic criteria.
+- A5: T-wave polarity opposite to a narrow dominant QRS may be a morphology
+  warning only when signal quality is adequate; it is not sufficient evidence
+  for ischemia or any specific diagnosis.
+- A6: Chinese documentation must emphasize single-lead limitations, artifact
+  dependence, and the need for clinician/12-lead confirmation.
+
+### Evidence consulted before execution
+- `ecg_receiver/core/ecg_signal.py`: current filtering, peak detection,
+  artifact fallback, and structured metric emission.
+- `ecg_receiver/core/ecg_demo.py`: synthetic P–QRS–T morphology used for tests.
+- `ecg_receiver/core/llm_diagnosis.py`: existing Chinese instruction that ST/T
+  interpretation must acknowledge single-lead limitations.
+- `README_CN.md`: currently documents signal processing and HR logic but has no
+  QRST morphology-screening section.
+- `tests/test_ecg_signal_artifact.py`: current regression tests cover artifact
+  fallback but no morphology screening.
+
+### Planned execution decision
+Implement a deterministic beat-template screening helper inside `ecg_signal.py`,
+not an ML classifier. Emit machine-readable codes plus Chinese labels. Run it
+only when QRS peak evidence is trustworthy; otherwise report `unavailable`.
+Expose fields through `compute_ecg_metrics`, `preprocess_for_llm`, the web API,
+and the LLM prompt. Add synthetic tests for normal morphology, wide QRS, ST
+shift, discordant T waves, artifact fallback, and insufficient signal. Update
+`README_CN.md` with a clinically cautious Chinese section.
+
+### In-loop implementation decisions and negative results (2026-11-28)
+- External reference check: adult QRS duration is method/lead dependent; AHA/ACCF/HRS
+  standardization material describes >110 ms as abnormal in adults and ≥120 ms as
+  complete bundle-branch-block territory. ST measurement is conventionally at the
+  J point or 40-80 ms after it and is highly sensitive to filtering/reference
+  baseline. Decision: use ≥120 ms as the strong warning and 110-120 ms as
+  borderline; never label the single-lead ST sign as ischemia/infarction.
+- Initial implementation used a 10% R-amplitude threshold for QRS width. Clean
+  synthetic high-rate validation produced false morphology abnormalities:
+  ST deviation at 90-100 bpm, apparent wide QRS at 120 bpm, and discordant T
+  waves at 110/140 bpm. Root cause: T/P waves crowd the fixed measurement window
+  at short RR intervals, and the low threshold connected QRS recovery to T-wave
+  activity.
+- Corrections after that negative result:
+  - QRS active-region threshold raised to 15% of dominant R amplitude;
+  - T search starts no earlier than 70 ms after the R peak;
+  - ST values are accepted only when the T peak is at least 60 ms after the
+    J+80 ms measurement point;
+  - T polarity voting is disabled when median RR <0.60 s;
+  - T polarity aggregation was corrected during self-review to count positive/negative
+    vote fractions rather than their signed sum, so a 2/3 majority is not mislabeled mixed;
+  - QRST confidence is capped at medium for short RR or incomplete scope.
+- Added `qrst_scope` because a normal result is misleading if ST/T could not be
+  assessed: `full` means ST and T were assessable; `limited` means only part of
+  QRST was assessable. A limited normal label reads “未见明显异常（可评估部分）”.
+- The six real artifact-dominated recordings all correctly produce
+  `qrst_status=unavailable` / `qrst_scope=unavailable` because the artifact
+  fallback means detected peaks are not trustworthy QRS evidence.
+
+### Measured results after QRST implementation (2026-11-28)
+Synthetic validation:
+- Normal simple QRST synthetic: `normal`, full scope, high confidence,
+  QRS width 50 ms, concordant T.
+- Wide-QRS synthetic (`qrs_sigma=55 ms`): `abnormal`, `wide_qrs`,
+  measured width 146 ms.
+- ST-shift synthetic (+150 µV): `abnormal`, `st_positive_deviation`,
+  measured +146.5 µV.
+- Inverted-T synthetic: `borderline`, `t_wave_discordance` only — deliberately
+  not a diagnostic abnormal finding by itself.
+- Clean demo 50/70 bpm: normal, full scope, high confidence.
+- Clean demo 90/100/110/120/140 bpm: no false positive findings; scope becomes
+  limited when ST or T cannot be evaluated reliably.
+- Real files win_1 through win_6: all `unavailable` for QRST because
+  `heart_rate_method=slow_component`; this confirms artifact-contaminated data
+  are not overinterpreted.
+
+Verification:
+- `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. pytest tests/ -x -q -p no:cacheprovider`
+  → **13 passed in 0.16-0.25 s across repeated runs**.
+- `python3 -m py_compile ecg_receiver/core/ecg_signal.py ecg_receiver/core/llm_diagnosis.py web_app.py`
+  passes.
+- Flask smoke test on port 5057: `/api/ecg/stream` exposed demo QRST
+  `normal`, scope `full`, confidence `high`, QRS 66 ms, ST +1.0 µV,
+  concordant T, 13 beats used; HTML contained the QRST tile/rendering logic.
+- `git diff --check` passes.
+
+### Adversarial review (QRST change set)
+1. **QRS duration remains heuristic.** The 15% amplitude-connected-region method
+   can underestimate true width when terminal forces are low-amplitude; a
+   borderline/normal width does not exclude conduction disease.
+2. **ST measurement is fundamentally limited by filtering.** The 0.5-40 Hz
+   clinical monitor band and baseline removal distort slow ST levels. Output is
+   a screening deviation, never a standalone ischemia/infarction marker.
+3. **Single-lead axis/polarity is unknown.** ST sign is relative to displayed
+   polarity; T-wave discordance can be positional or secondary to conduction
+   rather than primary repolarization disease.
+4. **High-rate coverage is intentionally incomplete.** At RR <0.60 s, T/P
+   overlap makes T polarity uncertain and often removes ST measurement; this
+   reduces sensitivity but avoids the false positives measured during development.
+5. **No QT/QTc is reported.** T-wave end detection is not reliable enough in the
+   current pipeline, so prolonged/short QT cannot be screened yet.
+6. **Real validation is negative rather than positive.** The available real
+   measurements are artifact-dominated and correctly yield unavailable QRST;
+   abnormal-path validation is therefore synthetic, not clinical ground truth.

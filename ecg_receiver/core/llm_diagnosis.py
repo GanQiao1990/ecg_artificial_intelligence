@@ -54,7 +54,8 @@ ECG_SYSTEM_PROMPT = """你是一名三甲医院心脏科主任医师，为临床
 
 ## 判读参考
 - 成人窦性心率：60–100 次/分；rr_variability_cv < 0.08 倾向规则节律。
-- 结合 peak_to_peak、波形片段形态讨论 ST/T 改变时须注明单导联局限性。
+- `qrst_status` 是规则化单导联形态筛查，不是 12 导联诊断；`unavailable` 时禁止臆测 QRS/ST/T。
+- 结合 peak_to_peak、波形片段形态讨论 ST/T 改变时须注明单导联局限性、滤波影响及电极位置不确定性。
 
 ## 输出要求
 - 仅返回合法 JSON（无 markdown 代码块、无前后说明文字）。
@@ -215,6 +216,10 @@ class LLMDiagnosisClient:
         hf = processed_data.get("hf_noise_ratio")
         hr_confidence = processed_data.get("heart_rate_confidence")
         artifact_period = processed_data.get("artifact_period_sec")
+        qrst_label = processed_data.get("qrst_status_label")
+        qrst_confidence = processed_data.get("qrst_confidence")
+        qrst_scope = processed_data.get("qrst_scope") or "unknown"
+        qrst_findings_cn = processed_data.get("qrst_findings_cn") or []
         user_parts = [
             "【心电分析摘要】系统已完成采样率校准、0.5-40Hz 滤波与 R 峰检测，请直接采用下列心率字段。",
             (
@@ -225,6 +230,8 @@ class LLMDiagnosisClient:
                 + (f" | 高频噪声占比：{hf}" if hf is not None else "")
                 + (f" | 心率估计置信度：{hr_confidence}" if hr_confidence else "")
                 + (f" | 周期性伪差间隔：{artifact_period:.3f}s" if artifact_period else "")
+                + (f" | QRST筛查：{qrst_label}（范围:{qrst_scope}，置信度:{qrst_confidence}）" if qrst_label else "")
+                + (f" | QRST线索：{'、'.join(qrst_findings_cn)}" if qrst_findings_cn else "")
             ),
             json.dumps(processed_data, indent=2, ensure_ascii=False),
         ]

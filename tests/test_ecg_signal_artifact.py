@@ -60,6 +60,9 @@ def test_periodic_impulse_artifact_uses_autocorrelation_fallback():
     assert metrics["heart_rate_confidence"] == "high"
     assert metrics["rhythm_label"] == "Undetermined"
     assert metrics["rr_variability"] is None
+    assert metrics["qrst_status"] == "unavailable"
+    assert metrics["qrst_reason"] == "artifact_or_non_qrs_rate_method"
+    assert metrics["qrst_scope"] == "unavailable"
     assert metrics["signal_quality_label"] in {"Fair", "Poor"}
 
 
