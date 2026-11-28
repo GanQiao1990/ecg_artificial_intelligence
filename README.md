@@ -12,6 +12,7 @@ Real-time ECG visualization and AI-assisted interpretation for **ESP32 + ADS1292
 
 - **Heart-rate calibration fix** — default sample rate is now **500 Hz** (ADS1292R typical), with auto-estimation from timestamps and packet timing
 - **Robust R-peak detection** — 0.42 s refractory period + amplitude NMS to avoid T-wave double counting
+- **Artifact-aware fallback** — periodic motion/tremor spike trains trigger an autocorrelation-based low-frequency cardiac estimate with confidence and artifact-period metadata
 - **Firmware HR fusion** — uses `heart_rate` from `DATA,...` CSV when available
 - **Bilingual clinical UI** — Chinese-primary labels with structured AI reports
 - **Multi-model LLM** — OpenAI-compatible APIs (Gemini, GPT-4o, DeepSeek, Qwen, local)
@@ -45,10 +46,11 @@ Real-time ECG visualization and AI-assisted interpretation for **ESP32 + ADS1292
 ### Heart-rate detection & calculation
 
 1. **R peaks** on the filtered trace: baseline-removed, polarity-agnostic envelope, amplitude-ranked NMS with **0.42 s refractory** (suppresses T/P double counts).
-2. **HR** = `60 / mean(RR)`; RR coefficient of variation → rhythm grade.
-3. **Overcount guards**: harmonic artifact train (envelope short-period ratio 1.7–2.5) or T-wave double-count (broad-peak fraction 0.25–0.75) ⇒ fallback to **<3 Hz slow-component autocorrelation** (`heart_rate_method=slow_component`).
-4. **HR zones**: <50 severe brady / 50–60 relative / 60–100 normal / 100–120 mild tachy / 120–150 tachy / >150 severe.
-5. **Source fusion**: device `hr` field > computed R-peak HR > fused mean; `heart_rate_source` records which was used.
+2. **HR** = `60 / median(RR)`; RR coefficient of variation → rhythm grade.
+3. **Artifact/overcount guards**: harmonic artifact train (envelope short-period ratio 1.7–3.2) or T-wave double-count (broad-peak fraction 0.25–0.75) ⇒ fallback to the **0.5–3 Hz cardiac-component autocorrelation** (`heart_rate_method=slow_component`, detail usually `acf`). Because artifact-corrupted peaks cannot establish RR rhythm, rhythm is reported as **Undetermined** and `rr_variability` is omitted in this fallback.
+4. **Fallback confidence**: the normalized autocorrelation peak is exposed as `heart_rate_acf_correlation` and mapped to `heart_rate_confidence` (`high` ≥0.25, `medium` ≥0.10, otherwise `low`); low confidence caps quality at Poor and all corrected traces cap at Fair. `artifact_period_sec` reports the detected periodic artifact interval.
+5. **HR zones**: <50 severe brady / 50–60 relative / 60–100 normal / 100–120 mild tachy / 120–150 tachy / >150 severe.
+6. **Source fusion**: device `hr` field and computed HR are fused only when they agree; normally a large disagreement trusts firmware as a sample-rate fallback, **except** during artifact correction, where the corrected low-frequency rate wins because firmware HR is derived from the same contaminated signal. `heart_rate_source` records which was used.
 
 The LLM receives all structured metrics plus a filtered waveform snippet and is instructed to adopt the system HR rather than recompute it.
 

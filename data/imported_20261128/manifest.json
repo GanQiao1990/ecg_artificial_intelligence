@@ -1,0 +1,42 @@
+{
+  "created_utc": "2026-11-28",
+  "note": "Provenance metadata for six real measurement CSVs copied from the user Windows host. Raw CSV files are intentionally untracked because data/**/*.csv is gitignored patient measurement data. Only hashes and non-identifying file metadata are committed.",
+  "files": [
+    {
+      "file": "ecg_measurement_win_1.csv",
+      "bytes": 902456,
+      "source_lastwrite": "2026-11-21T13:21:37.3520742+08:00",
+      "sha256": "470eb8d0a4d86980e88c9d4465c85fc5b97d2f782209ef646a7d55a2a02dd5f1"
+    },
+    {
+      "file": "ecg_measurement_win_2.csv",
+      "bytes": 947450,
+      "source_lastwrite": "2026-11-22T00:41:14.3391465+08:00",
+      "sha256": "635d8f57a634e978af4bea5265694c021b2d281a0746f5238eb07c5c08a8169b"
+    },
+    {
+      "file": "ecg_measurement_win_3.csv",
+      "bytes": 957288,
+      "source_lastwrite": "2026-11-22T00:41:13.8304612+08:00",
+      "sha256": "63b06c8ea47ff59da02a9ef1cac03bb99c133ba3c96a5e33df05a1bc9185bbcb"
+    },
+    {
+      "file": "ecg_measurement_win_4.csv",
+      "bytes": 957444,
+      "source_lastwrite": "2026-11-22T00:41:13.4399719+08:00",
+      "sha256": "4268b87aecdaeeffa1857738b662c63ff2b84da46d5e24096921397768867c2e"
+    },
+    {
+      "file": "ecg_measurement_win_5.csv",
+      "bytes": 952447,
+      "source_lastwrite": "2026-11-22T00:41:12.6515081+08:00",
+      "sha256": "c8aa2fcca093ef1ab281ccee57164358f0d02f61167baa2f735115e33d959709"
+    },
+    {
+      "file": "ecg_measurement_win_6.csv",
+      "bytes": 952445,
+      "source_lastwrite": "2026-11-22T00:41:12.1821287+08:00",
+      "sha256": "6b55e72b61d6ecd1c64bed11f45f647ae23bc753a1e06da76a0d2b69a844dee6"
+    }
+  ]
+}

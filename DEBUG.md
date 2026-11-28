@@ -226,3 +226,166 @@ Real CSV check — `data/ecg_measurement_woman23_normal.csv` (23F, 正常心脏)
 - README.md + README_CN.md: new "Signal Acquisition & Heart-Rate Principles"
   section — ADS1292R chain, stream-vs-ADC rate, tracker/snap/cross-check,
   filter chain, R-peak/NMS/refractory, overcount guards, HR zones, LLM fields.
+
+---
+
+## 2026-11-28 — Full Windows measurement-set validation and possible revision
+
+### Deeper-question check (Rule 1)
+Recurring theme: the user repeatedly asks whether the code was revised from the
+*latest data* and then whether GitHub reflects that revision. Candidate deeper
+question: **is the ECG pipeline validated across the complete real measurement
+set, and is the public repository state an accurate representation of that
+validation — rather than merely being updated for one convenient CSV?**
+This task is an instance of that deeper question, so execution must first
+establish coverage across all user-identified measurement files before deciding
+whether another code revision is justified.
+
+### Assumptions (pre-execution)
+- A1: The six Windows paths supplied by the user on host `10.110.3.80` are real
+  measurement exports and are distinct from, or at least not fully represented
+  by, the single existing local file `data/ecg_measurement_woman23_normal.csv`.
+- A2: File names alone do not establish ordering or physiological condition;
+  CSV metadata/content must be inspected before inferring anything.
+- A3: Code changes are justified only if multiple real measurements expose a
+  reproducible algorithmic discrepancy, or one measurement exposes a clear
+  correctness bug with a mechanistic explanation.
+- A4: Pulling files from the user's own Windows host is authorized by the user;
+  access will be read-only on the source files.
+- A5: Existing local code state is clean and equivalent to `origin/main` at
+  commit `3bedcc6` before this task.
+
+### Evidence consulted before execution
+- User-supplied Windows paths:
+  - `D:\腾讯电脑管家软件搬家\C盘清理文件搬家\xwechat_files\qiaoshizhishen_c075\msg\file\2026-11\ecg_measurement (1).csv`
+  - `D:\腾讯电脑管家软件搬家\C盘清理文件搬家\xwechat_files\qiaoshizhishen_c075\msg\file\2026-11\ecg_measurement (2).csv`
+  - `D:\腾讯电脑管家软件搬家\C盘清理文件搬家\xwechat_files\qiaoshizhishen_c075\msg\file\2026-11\ecg_measurement (3).csv`
+  - `D:\腾讯电脑管家软件搬家\C盘清理文件搬家\xwechat_files\qiaoshizhishen_c075\msg\file\2026-11\ecg_measurement_1.csv`
+  - `D:\腾讯电脑管家软件搬家\C盘清理文件搬家\xwechat_files\qiaoshizhishen_c075\msg\file\2026-11\ecg_measurement_2.csv`
+  - `D:\腾讯电脑管家软件搬家\C盘清理文件搬家\xwechat_files\qiaoshizhishen_c075\msg\file\2026-11\ecg_measurement_3.csv`
+- Existing ledger sections above: the 2026-11-20/21 fixes were validated mainly
+  against `data/ecg_measurement_woman23_normal.csv` plus synthetic signals.
+- Git evidence already measured this session: working tree clean; only local
+  branch `main` at `3bedcc6`; no unpushed commits; PR #1 already merged.
+- LAN access notes in `/home/qiao/skills_2026/ego-lan-skill/RECOVERY.md`:
+  SSH to `dell@10.110.3.80` uses key auth; default shell is cmd.exe;
+  PowerShell file execution is preferred over complex inline quoting.
+
+### Planned execution decision
+Use SSH/PowerShell, not browser automation, because this is Windows file access,
+not a browser task. Copy source CSVs read-only into an ASCII-only temporary
+Windows directory, transfer them to Linux under `data/imported_20261128/`,
+verify SHA-256 on both sides, inspect schemas/metadata, then run the current
+pipeline over all files before deciding whether code changes are warranted.
+
+### In-loop evidence after transfer (2026-11-28)
+- SHA-256 verification matched Windows staged copies exactly for all six files.
+  `ecg_measurement_win_1.csv` is byte-identical to the pre-existing
+  `data/ecg_measurement_woman23_normal.csv`; files 2-6 are new evidence.
+- All six are real serial captures (`demo_mode=False`, `serial_connected=True`,
+  COM3), 5000 rows each at 500 Hz (10 s). Files 4-6 were captured back-to-back
+  within ~25 s, so their heart-rate estimates should be mutually consistent.
+- Current pipeline outputs on files 4-6 are unstable: 56.8 / 65.1 / 63.8 bpm, all through `slow_component`, despite the near-contiguous
+  acquisition. File 3 remains at 111.3 bpm because the existing slow-component
+  peak picker fails (`slow=None`) and the overcount guard cannot engage.
+- Exploratory autocorrelation of the <3 Hz component gives a stable physiological
+  period across files 4-6: 58.6 / 58.7 / 58.6 bpm with autocorrelation 0.43-0.50.
+  It also gives 55.7 bpm for file 1 and 56.2 bpm for file 3 (weak but nonzero).
+- Decision point: replace/augment peak-picking in the slow-component fallback
+  with autocorrelation as the primary rate estimator. Do not treat unstable
+  artifact-corrupted slow peaks as evidence of clinical irregularity unless
+  their count and median interval are consistent with the autocorrelation period.
+
+### Revision implemented (2026-11-28)
+- `_envelope_short_period` now selects the strongest autocorrelation peak inside
+  the artifact-period search window rather than the first side lobe; the accepted
+  harmonic ratio was widened to 1.7-3.2 because refractory NMS can undersample a
+  periodic impulse train at either half or one-third rate.
+- `_slow_component_rate` now uses a 0.5-3 Hz band and autocorrelation as the
+  primary rate estimator (`heart_rate_method_detail=acf`). Low-frequency peak
+  positions are retained only as supporting metadata; their intervals are not
+  treated as clinical RR intervals because they may be P/T waves or artifact
+  ringing. Rhythm therefore becomes `Undetermined` and `rr_variability` is null
+  whenever this fallback is used.
+- Fallback metadata added end-to-end: `heart_rate_method_detail`,
+  `heart_rate_confidence` (high ≥0.25, medium ≥0.10, low otherwise),
+  `heart_rate_acf_correlation`, and `artifact_period_sec`.
+  Quality is capped at Fair for any corrected recording and Poor for
+  low-confidence corrections.
+- Agreement case added: when a periodic artifact is detected but QRS-based and
+  low-frequency rates already agree within 20%, the low-frequency estimate still
+  becomes the reported rate because the peak/rhythm evidence is contaminated.
+- Firmware-HR interaction fixed: after artifact correction, a conflicting
+  firmware HR cannot undo the corrected low-frequency estimate; fusion is used
+  only when the two sources agree within 12%. Rationale: the firmware HR is
+  derived from the same artifact-contaminated frontend signal.
+- Autocorrelation implementation changed from direct `np.correlate` to FFT.
+  Measured metric-computation time on `win_4`: mean 13.02 ms before, 6.04 ms
+  after (50 iterations, 5000 samples).
+- Web stream/API, frontend warning/method tile, LLM prompt, README.md and
+  README_CN.md were updated to expose and explain the new fields.
+- Permanent regression tests added in `tests/test_ecg_signal_artifact.py` using
+  synthetic artifact-contaminated signals only; no patient waveform data are
+  committed. `data/imported_20261128/manifest.json` is a sanitized hash/provenance
+  manifest; raw CSVs remain untracked under the existing `data/**/*.csv` rule.
+
+### Measured results after revision (2026-11-28)
+Real measurement files, `ecg_mV*1000` → µV, 500 Hz:
+
+| file | saved HR bpm | revised HR bpm | method/detail | confidence | ACF corr | artifact s | rhythm | quality |
+|---|---:|---:|---|---|---:|---:|---|---|
+| win_1 | 110.29 | 55.74 | slow_component/acf | medium | 0.1916 | 0.2678 | Undetermined | Fair |
+| win_2 | 96.77 | 88.09 | slow_component/acf | high | 0.2997 | 0.2513 | Undetermined | Fair |
+| win_3 | 110.70 | 55.49 | slow_component/acf | low | 0.0685 | 0.2423 | Undetermined | Poor |
+| win_4 | 114.50 | 58.24 | slow_component/acf | high | 0.4719 | 0.2677 | Undetermined | Fair |
+| win_5 | 111.11 | 59.66 | slow_component/acf | high | 0.4277 | 0.2676 | Undetermined | Fair |
+| win_6 | 110.70 | 59.08 | slow_component/acf | high | 0.4974 | 0.2666 | Undetermined | Fair |
+
+Interpretation boundary: the measurements consistently contain a narrow periodic
+spike train near 3.7-4.1 Hz. The pipeline treats this as a non-QRS periodic
+artifact and reports the lower-frequency cardiac repetition rate with explicit
+confidence. There is **no independent ground truth** (simultaneous reference
+pulse oximeter, clinician annotation, or clean lead) in these CSVs; therefore the
+low-frequency rates are best-supported estimates, not proven diagnoses.
+
+Verification:
+- `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. pytest tests/ -x -q -p no:cacheprovider`
+  → **7 passed in 0.14-0.15 s**.
+- Clean synthetic 50-140 bpm remained `qrs_peaks` and accurate:
+  50.0, 60.0, 69.93, 90.09, 100.0, 109.89, 120.0, 129.87, 140.19 bpm.
+  Some synthetic high-rate quality labels are Fair because of morphology/QC, but
+  the rate method is not incorrectly converted to the artifact fallback.
+- Edge cases: flat and short inputs produce no HR and `No signal` without crash.
+- 50 Hz mains test: HR remains 69.93 bpm, method `qrs_peaks`,
+  `mains_interference_hz=50.0`, quality Fair.
+- Device-conflict regression: synthetic artifact-contaminated 58 bpm recording
+  with `device_hr_bpm=115` still reports ≈58 bpm and source `computed`.
+- Flask smoke test on port 5056 after POST `/api/demo/start`:
+  `/api/ecg/stream` exposed HR 72.0, method `qrs_peaks`, detail/confidence/ACF/
+  artifact fields as null, rhythm Regular, quality Excellent, source fused;
+  HTML contained the artifact fallback/confidence rendering strings.
+- `git diff --check` passes.
+- SHA-256 verification of all six local CSVs matches the sanitized committed
+  manifest exactly.
+
+### Adversarial review (2026-11-28)
+1. **Ground truth remains absent.** The ~4 Hz spike train is mechanistically
+   artifact-like, but the files do not prove the true cardiac rate. The new
+   confidence/quality/rhythm fields are therefore essential and must not be
+   stripped downstream.
+2. **Autocorrelation can lock onto a non-cardiac low-frequency oscillation.**
+   The 0.5-3 Hz band can include respiration, baseline motion, or artifact
+   ringing. This is mitigated but not eliminated by confidence thresholds and
+   quality caps.
+3. **Partial overcounting remains possible.** If artifact spikes increase the
+   measured rate by less than the harmonic gate (for example an occasional extra
+   peak rather than 2x/3x undersampling), the correction may not trigger.
+4. **Short 10 s windows limit precision.** At 55-60 bpm there are only ~9-10
+   cardiac cycles; rate uncertainty of several bpm remains even when the ACF
+   peak is strong.
+5. **False-positive artifact gates are still possible on unusual real rhythms.**
+   Clean synthetic 50-140 bpm regressions pass, but wide-QRS/ectopy-rich real
+   recordings were not available in this measurement set.
+6. **Sample-rate truth is not independently established by these CSVs.** They
+   all state 500 Hz but contain no separate clock reference validating that
+   value; all absolute rates scale with any sample-rate error.

@@ -809,7 +809,9 @@ function updateStats(m) {
   if (method === 'slow_component') {
     methodEl.textContent = 'LF estimate';
     methodEl.style.color = '#f59e0b';
-    methodSub.textContent = 'artifact fallback';
+    methodSub.textContent = m.heart_rate_confidence
+      ? `artifact fallback · ${m.heart_rate_confidence} conf`
+      : 'artifact fallback';
   } else if (method === 'device') {
     methodEl.textContent = 'Device';
     methodEl.style.color = '#22d3ee';
@@ -858,7 +860,9 @@ function renderSignalAlerts(m) {
     alerts.push({ cls: 'warn', text: `Mains interference ${m.mains_interference_hz} Hz detected — notch filter applied` });
   }
   if (m.heart_rate_method === 'slow_component') {
-    alerts.push({ cls: 'warn', text: 'HR estimated from low-frequency component — periodic artifact in QRS band' });
+    const period = m.artifact_period_sec ? ` (artifact ~${(1 / m.artifact_period_sec).toFixed(1)} Hz)` : '';
+    const conf = m.heart_rate_confidence ? `, ${m.heart_rate_confidence} confidence` : '';
+    alerts.push({ cls: 'warn', text: `HR estimated from low-frequency component — periodic artifact in QRS band${period}${conf}` });
   }
   if (m.hf_noise_ratio != null && m.hf_noise_ratio > 0.45) {
     alerts.push({ cls: 'info', text: `Elevated high-frequency noise (${(m.hf_noise_ratio * 100).toFixed(0)}%)` });
