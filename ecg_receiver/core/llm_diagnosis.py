@@ -213,6 +213,8 @@ class LLMDiagnosisClient:
         hr_method = processed_data.get("heart_rate_method", "qrs_peaks")
         mains = processed_data.get("mains_interference_hz")
         hf = processed_data.get("hf_noise_ratio")
+        hr_confidence = processed_data.get("heart_rate_confidence")
+        artifact_period = processed_data.get("artifact_period_sec")
         user_parts = [
             "【心电分析摘要】系统已完成采样率校准、0.5-40Hz 滤波与 R 峰检测，请直接采用下列心率字段。",
             (
@@ -221,6 +223,8 @@ class LLMDiagnosisClient:
                 f"| 采样率：{fs} Hz | QRS：{processed_data.get('qrs_count')} | 节律：{processed_data.get('rhythm_regularity')} | 质量：{processed_data.get('signal_quality')}"
                 + (f" | 市电干扰：{mains} Hz" if mains else "")
                 + (f" | 高频噪声占比：{hf}" if hf is not None else "")
+                + (f" | 心率估计置信度：{hr_confidence}" if hr_confidence else "")
+                + (f" | 周期性伪差间隔：{artifact_period:.3f}s" if artifact_period else "")
             ),
             json.dumps(processed_data, indent=2, ensure_ascii=False),
         ]

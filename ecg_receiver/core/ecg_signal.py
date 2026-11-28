@@ -337,6 +337,20 @@ def detect_r_peaks(data: np.ndarray, sample_rate: float) -> List[int]:
     return peaks
 
 
+def _normalized_autocorrelation(data: np.ndarray) -> np.ndarray:
+    """Biased normalized autocorrelation via FFT (positive lags only)."""
+    centered = data.astype(np.float64) - float(np.mean(data))
+    n = centered.size
+    if n == 0:
+        return np.asarray([], dtype=np.float64)
+    nfft = 1 << (2 * n - 1).bit_length()
+    spec = np.fft.rfft(centered, nfft)
+    ac = np.fft.irfft(spec * np.conj(spec), nfft)[:n]
+    if ac.size == 0 or ac[0] <= 0:
+        return np.asarray([], dtype=np.float64)
+    return ac / ac[0]
+
+
 def _envelope_short_period(
     envelope: np.ndarray,
     sample_rate: float,
@@ -345,48 +359,112 @@ def _envelope_short_period(
     min_corr: float = 0.10,
 ) -> Optional[float]:
     """
-    First major autocorrelation peak of the |signal| envelope within [lo, hi] s.
+    Dominant autocorrelation period of the |signal| envelope within [lo, hi] s.
 
     Detects a fast periodic train (e.g. artifact spikes) that the refractory
-    NMS may be undersampling at ~half rate. Returns lag in seconds or None.
+    NMS may undersample at half or one-third rate. The strongest lag is used:
+    jittered artifact trains often produce several side lobes, and choosing the
+    earliest side lobe underestimates the artifact period. Returns lag seconds
+    or None.
     """
-    env = envelope.astype(np.float64) - float(np.mean(envelope))
+    env = envelope.astype(np.float64)
     if env.size < int(hi_sec * sample_rate) + 2:
         return None
-    ac = np.correlate(env, env, "full")[env.size - 1 :]
-    if ac.size == 0 or ac[0] <= 0:
+    ac = _normalized_autocorrelation(env)
+    if ac.size == 0:
         return None
-    ac = ac / ac[0]
     lo = int(lo_sec * sample_rate)
     hi = min(int(hi_sec * sample_rate), ac.size - 2)
-    for i in range(lo, hi):
-        if ac[i] >= ac[i - 1] and ac[i] > ac[i + 1] and ac[i] > min_corr:
-            y0, y1, y2 = ac[i - 1], ac[i], ac[i + 1]
-            denom = y0 - 2.0 * y1 + y2
-            delta = 0.5 * (y0 - y2) / denom if denom != 0 else 0.0
-            return float(i + delta) / sample_rate
-    return None
+    candidates = [
+        i
+        for i in range(lo, hi)
+        if ac[i] >= ac[i - 1] and ac[i] > ac[i + 1] and ac[i] > min_corr
+    ]
+    if not candidates:
+        return None
+    i = max(candidates, key=lambda lag: float(ac[lag]))
+    y0, y1, y2 = ac[i - 1], ac[i], ac[i + 1]
+    denom = y0 - 2.0 * y1 + y2
+    delta = 0.5 * (y0 - y2) / denom if denom != 0 else 0.0
+    return float(i + delta) / sample_rate
+
+
+def _dominant_acf_period(
+    data_uv: np.ndarray,
+    sample_rate: float,
+    lo_sec: float = 0.45,
+    hi_sec: float = 2.0,
+    min_corr: float = 0.025,
+) -> Tuple[Optional[float], float]:
+    """
+    Dominant physiological repetition period by autocorrelation.
+
+    Returns (period_sec, normalized_correlation). The strongest peak is found
+    first, then the earliest peak within 75% of that strength is selected. This
+    avoids both (a) noise-induced very early peaks and (b) later harmonic peaks
+    when the true cardiac lag is already prominent.
+    """
+    n = data_uv.size
+    if n < int(hi_sec * sample_rate) + 2:
+        return None, 0.0
+
+    ac = _normalized_autocorrelation(data_uv)
+    if ac.size == 0:
+        return None, 0.0
+
+    lo = max(1, int(lo_sec * sample_rate))
+    hi = min(int(hi_sec * sample_rate), ac.size - 2)
+    if hi <= lo:
+        return None, 0.0
+
+    peaks = [
+        i
+        for i in range(lo, hi)
+        if ac[i] >= ac[i - 1] and ac[i] > ac[i + 1] and ac[i] > min_corr
+    ]
+    if not peaks:
+        return None, 0.0
+
+    best = max(peaks, key=lambda i: float(ac[i]))
+    best_corr = float(ac[best])
+    eligible = [i for i in peaks if float(ac[i]) >= 0.75 * best_corr]
+    chosen = min(eligible) if eligible else best
+
+    y0, y1, y2 = float(ac[chosen - 1]), float(ac[chosen]), float(ac[chosen + 1])
+    denom = y0 - 2.0 * y1 + y2
+    delta = 0.5 * (y0 - y2) / denom if denom != 0 else 0.0
+    period = float(chosen + delta) / sample_rate
+    if period <= 0:
+        return None, 0.0
+    return period, float(ac[chosen])
 
 
 def _slow_component_rate(
     data_uv: np.ndarray,
     sample_rate: float,
-) -> Tuple[Optional[float], Optional[float], List[int]]:
+) -> Tuple[Optional[float], Optional[float], List[int], Dict[str, Any]]:
     """
-    Cardiac-rate estimate from the <3 Hz component (P/T-wave repetition rate).
+    Cardiac-rate estimate from the 0.5-3 Hz component (P/T-wave repetition rate).
 
     Robust when sharp high-frequency artifacts dominate the QRS band: the
     artifact spikes live above ~3 Hz while the cardiac cycle repeats at ~1 Hz.
-    Returns (bpm, rr_cv, peak_indices) or (None, None, []).
+    Autocorrelation is the primary rate estimator because artifact-corrupted
+    peak picking can miss cycles and produce unstable rates on adjacent windows.
+    Peak-derived RR variability is not treated as clinical rhythm evidence here:
+    the low-frequency peaks may be P/T waves or artifact ringing rather than QRS
+    complexes. Rhythm therefore remains honestly undetermined in this fallback
+    instead of falsely irregular.
+
+    Returns (bpm, rr_cv, peak_indices, estimator_info).
     """
     n = data_uv.size
     if n < int(sample_rate * 3):
-        return None, None, []
+        return None, None, [], {"estimator": "none"}
 
     centered = data_uv.astype(np.float64) - float(np.mean(data_uv))
     spec = np.fft.rfft(centered)
     freqs = np.fft.rfftfreq(n, d=1.0 / sample_rate)
-    spec[freqs > 3.0] = 0.0
+    spec[(freqs < 0.5) | (freqs > 3.0)] = 0.0
     slow = np.fft.irfft(spec, n)
 
     # Light smoothing suppresses residual ripple from the brick-wall cutoff
@@ -416,21 +494,56 @@ def _slow_component_rate(
         blocked[max(0, i - min_dist) : i + min_dist + 1] = True
     peaks.sort()
 
-    if len(peaks) < 4:
-        return None, None, peaks
+    peak_bpm: Optional[float] = None
+    peak_cv: Optional[float] = None
+    median_peak_rr: Optional[float] = None
+    valid_count = 0
+    if len(peaks) >= 4:
+        rr = np.diff(np.asarray(peaks, dtype=np.float64)) / sample_rate
+        valid = rr[(rr >= RR_MIN_SEC) & (rr <= RR_MAX_SEC)]
+        valid_count = int(valid.size)
+        if valid.size >= 3:
+            median_peak_rr = float(np.median(valid))
+            if median_peak_rr > 0:
+                peak_bpm = max(HR_MIN_BPM, min(HR_MAX_BPM, 60.0 / median_peak_rr))
+                peak_cv = float(np.std(valid) / np.mean(valid)) if valid.size >= 2 else 0.0
 
-    rr = np.diff(np.asarray(peaks, dtype=np.float64)) / sample_rate
-    valid = rr[(rr >= RR_MIN_SEC) & (rr <= RR_MAX_SEC)]
-    if valid.size < 3:
-        return None, None, peaks
+    acf_period, acf_corr = _dominant_acf_period(slow, sample_rate)
+    if acf_period:
+        acf_bpm = max(HR_MIN_BPM, min(HR_MAX_BPM, 60.0 / acf_period))
+        duration_sec = n / sample_rate
+        expected_cycles = max(duration_sec / acf_period, 1e-9)
+        coverage = len(peaks) / expected_cycles
+        rr_ratio = (
+            median_peak_rr / acf_period
+            if median_peak_rr is not None and acf_period > 0
+            else None
+        )
+        peaks_reliable = bool(
+            peak_bpm is not None
+            and rr_ratio is not None
+            and 0.85 <= rr_ratio <= 1.15
+            and coverage >= 0.65
+        )
+        return (
+            acf_bpm,
+            None,
+            peaks,
+            {
+                "estimator": "acf",
+                "period_sec": float(acf_period),
+                "acf_correlation": float(acf_corr),
+                "peak_count": len(peaks),
+                "peak_coverage": float(coverage),
+                "peaks_reliable": peaks_reliable,
+                "peak_bpm": peak_bpm,
+                "valid_rr_count": valid_count,
+            },
+        )
 
-    median_rr = float(np.median(valid))
-    if median_rr <= 0:
-        return None, None, peaks
-
-    bpm = max(HR_MIN_BPM, min(HR_MAX_BPM, 60.0 / median_rr))
-    cv = float(np.std(valid) / np.mean(valid)) if valid.size >= 2 else 0.0
-    return bpm, cv, peaks
+    if peak_bpm is not None:
+        return peak_bpm, None, peaks, {"estimator": "peaks", "peak_count": len(peaks)}
+    return None, None, peaks, {"estimator": "none", "peak_count": len(peaks)}
 
 
 def _broad_peak_fraction(
@@ -588,6 +701,10 @@ def compute_ecg_metrics(
             "computed_hr_bpm": None,
             "device_hr_bpm": device_hr_bpm,
             "heart_rate_method": "none",
+            "heart_rate_method_detail": None,
+            "heart_rate_confidence": None,
+            "heart_rate_acf_correlation": None,
+            "artifact_period_sec": None,
             "heart_rate_zone": "unknown",
             "heart_rate_zone_label": "未知",
             "heart_rate_abnormal": False,
@@ -613,39 +730,76 @@ def compute_ecg_metrics(
     final_bpm, hr_source = resolve_heart_rate(computed_bpm, device_hr_bpm, peaks)
     rhythm_label, rhythm_token = rhythm_from_cv(rr_cv)
     rate_method = "qrs_peaks"
+    rate_method_detail: Optional[str] = None
+    heart_rate_confidence: Optional[str] = None
+    heart_rate_acf_correlation: Optional[float] = None
+    artifact_period_sec: Optional[float] = None
     harmonic_corrected = False
 
-    # Overcount guard: two artifact signatures both make the peak detector
-    # report ~2x the true rate —
-    #   (a) harmonic: the envelope holds a faster periodic train (~half the
-    #       detected RR) that refractory NMS undersamples (motion/tremor spikes);
+    # Overcount/artifact guard: two artifact signatures invalidate peak-based
+    # rate and rhythm evidence —
+    #   (a) harmonic: the envelope holds a faster periodic train that refractory
+    #       NMS undersamples at about half or one-third rate (motion/tremor spikes);
     #   (b) t_wave_alt: ~half the detected peaks are broad (T-waves counted as
     #       beats because they land just outside the refractory window).
-    # In either case the <3 Hz cardiac component gives the trustworthy rate.
+    # In either case the 0.5-3 Hz cardiac component is the trustworthy rate source.
     if computed_bpm and arr.size >= int(sample_rate * 3):
         median_rr = 60.0 / computed_bpm
         envelope = np.abs(_remove_baseline(filtered_uv, sample_rate))
         short_period = _envelope_short_period(envelope, sample_rate)
         harmonic_env = bool(
-            short_period and 1.7 <= median_rr / short_period <= 2.5
+            short_period and 1.7 <= median_rr / short_period <= 3.2
         )
+        if harmonic_env:
+            artifact_period_sec = short_period
         broad_frac = _broad_peak_fraction(envelope, peaks, sample_rate)
         t_wave_alt = 0.25 <= broad_frac <= 0.75
         if harmonic_env or t_wave_alt:
-            slow_bpm, slow_cv, slow_peaks = _slow_component_rate(filtered_uv, sample_rate)
-            if (
-                slow_bpm
-                and 1.5 <= computed_bpm / slow_bpm <= 2.6
-                and abs(computed_bpm - slow_bpm) / ((computed_bpm + slow_bpm) / 2.0) > 0.25
-            ):
+            slow_bpm, slow_cv, slow_peaks, slow_info = _slow_component_rate(
+                filtered_uv, sample_rate
+            )
+            if slow_bpm:
+                slow_ratio = computed_bpm / slow_bpm
+                relative_disagreement = abs(computed_bpm - slow_bpm) / (
+                    (computed_bpm + slow_bpm) / 2.0
+                )
+                overcount_correction = (
+                    1.5 <= slow_ratio <= 2.6 and relative_disagreement > 0.25
+                )
+                artifact_confirmed_agreement = relative_disagreement <= 0.20
+            else:
+                overcount_correction = False
+                artifact_confirmed_agreement = False
+
+            if slow_bpm and (overcount_correction or artifact_confirmed_agreement):
                 computed_bpm = slow_bpm
                 rr_cv = slow_cv
                 peaks = slow_peaks
                 rate_method = "slow_component"
+                rate_method_detail = str(slow_info.get("estimator") or "unknown")
+                heart_rate_acf_correlation = slow_info.get("acf_correlation")
+                if heart_rate_acf_correlation is not None:
+                    if heart_rate_acf_correlation >= 0.25:
+                        heart_rate_confidence = "high"
+                    elif heart_rate_acf_correlation >= 0.10:
+                        heart_rate_confidence = "medium"
+                    else:
+                        heart_rate_confidence = "low"
                 harmonic_corrected = True
-                final_bpm, hr_source = resolve_heart_rate(
-                    computed_bpm, device_hr_bpm, peaks
-                )
+                # Firmware HR is computed from the same artifact-contaminated
+                # frontend signal, so a large disagreement must not undo the
+                # correction. Fuse only when the two estimates independently agree.
+                if device_hr_bpm is not None:
+                    avg = (device_hr_bpm + computed_bpm) / 2.0
+                    if avg > 0 and abs(device_hr_bpm - computed_bpm) / avg <= 0.12:
+                        final_bpm = round((device_hr_bpm + computed_bpm) / 2.0, 1)
+                        hr_source = "fused"
+                    else:
+                        final_bpm = computed_bpm
+                        hr_source = "computed"
+                else:
+                    final_bpm = computed_bpm
+                    hr_source = "computed"
                 rhythm_label, rhythm_token = rhythm_from_cv(rr_cv)
 
     peak_to_peak = float(np.ptp(arr_uv))
@@ -674,7 +828,9 @@ def compute_ecg_metrics(
     # A harmonic-overcount correction means the QRS band is dominated by a
     # periodic artifact train — the tracing cannot be called clean. Strong
     # mains interference likewise caps the grade at Fair.
-    if (harmonic_corrected or mains_hz is not None) and quality_token == "green":
+    if harmonic_corrected and heart_rate_confidence == "low":
+        quality_label, quality_token = "Poor", "red"
+    elif (harmonic_corrected or mains_hz is not None) and quality_token == "green":
         quality_label, quality_token = "Fair", "yellow"
 
     hr_zone_key, hr_zone_label, _, hr_abnormal = hr_zone(final_bpm)
@@ -683,6 +839,16 @@ def compute_ecg_metrics(
         "heart_rate_bpm": final_bpm,
         "heart_rate_source": hr_source,
         "heart_rate_method": rate_method,
+        "heart_rate_method_detail": rate_method_detail,
+        "heart_rate_confidence": heart_rate_confidence,
+        "heart_rate_acf_correlation": (
+            round(heart_rate_acf_correlation, 4)
+            if heart_rate_acf_correlation is not None
+            else None
+        ),
+        "artifact_period_sec": (
+            round(artifact_period_sec, 4) if artifact_period_sec is not None else None
+        ),
         "heart_rate_zone": hr_zone_key,
         "heart_rate_zone_label": hr_zone_label,
         "heart_rate_abnormal": hr_abnormal,
@@ -739,6 +905,10 @@ def preprocess_for_llm(
         "device_hr_bpm": metrics["device_hr_bpm"],
         "computed_hr_bpm": metrics["computed_hr_bpm"],
         "heart_rate_method": metrics.get("heart_rate_method", "qrs_peaks"),
+        "heart_rate_method_detail": metrics.get("heart_rate_method_detail"),
+        "heart_rate_confidence": metrics.get("heart_rate_confidence"),
+        "heart_rate_acf_correlation": metrics.get("heart_rate_acf_correlation"),
+        "artifact_period_sec": metrics.get("artifact_period_sec"),
         "heart_rate_zone": metrics.get("heart_rate_zone", "unknown"),
         "heart_rate_zone_label": metrics.get("heart_rate_zone_label", "未知"),
         "heart_rate_abnormal": metrics.get("heart_rate_abnormal", False),
@@ -759,11 +929,12 @@ def preprocess_for_llm(
                 if metrics.get("mains_interference_hz")
                 else ""
             )
-            + ". Heart rate uses firmware value when available; otherwise R-peak detection "
+            + ". Heart rate normally uses firmware agreement or R-peak detection "
             f"at {metrics['sample_rate_hz']:.0f} Hz with {REFRACTORY_SEC:.2f}s refractory period."
             + (
                 " Peak-based estimate showed harmonic overcount on a periodic artifact "
-                "train; rate falls back to the <3 Hz cardiac component."
+                "train; rate falls back to the 0.5-3 Hz cardiac component and "
+                "conflicting firmware HR is not allowed to override that correction."
                 if metrics.get("heart_rate_method") == "slow_component"
                 else ""
             )
