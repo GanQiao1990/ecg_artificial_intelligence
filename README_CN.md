@@ -74,9 +74,61 @@
 5. **心率分区**（`hr_zone`，成人静息参考）：<50 严重心动过缓 / 50–60 心动过缓(偏低) / 60–100 正常 / 100–120 窦性心动过速可能 / 120–150 心动过速 / >150 严重心动过速；输出 `heart_rate_zone`、中文标签与异常标志。
 6. **来源融合**（`resolve_heart_rate`）：固件 `hr` 字段与算法心率一致时融合；一般情况下大幅不一致优先相信固件心率作为采样率兜底，**但伪差修正触发时例外**——固件心率同样来自受污染前端信号，不能推翻已修正的低频心率。`heart_rate_source` 记录实际取值来源。
 
+
+### QRST 形态筛查（保守规则，非诊断）
+
+系统可对 QRS–ST–T 形态做**单导联筛查**，回答“有没有异常线索”，而不是给出疾病诊断。该功能只使用确定性规则，不使用黑箱分类器。
+
+#### 何时可以评估
+
+同时满足以下条件才输出 QRST 结果：
+
+- 心率方法为 `qrs_peaks`，即 R 峰序列可信；
+- 至少有 3 个完整心搏可用于中位数统计；
+- 信号质量不是 Poor / No signal；
+- 周期性伪差回退未触发。
+
+如果触发了 `slow_component` 伪差回退，检测到的峰不再是可靠 QRS 证据，因此输出固定为：`qrst_status=unavailable`、`qrst_reason=artifact_or_non_qrs_rate_method`。这是刻意设计的安全行为：宁可不评估，也不把伪差解释成心室复极异常。
+
+#### 测量与筛查规则
+
+1. **QRS 时限**：以 R 峰对齐心搏，使用 PQ/PR 段作局部基线，估计单个导联上的 QRS 宽度并取中位数。
+   - `qrs_duration_ms ≥ 120 ms` → `wide_qrs`，总状态为 `abnormal`；
+   - `110–120 ms` → `borderline_qrs_width`；
+   - 该测量是单导联启发式宽度，不能替代 12 导联全局 QRS 时限。
+2. **ST 段偏移**：在 J 点后约 80 ms 测量，若 T 波峰值距离测量点小于 60 ms（常见于较快心率），该心搏 ST 值会被丢弃而不是误读为 ST 偏移。
+   - 绝对偏移 `≥100 µV` → 强异常线索；
+   - `50–100 µV` → 边界/需复查线索；
+   - 输出仅为相对显示极性的 `st_deviation_uv`。由于电极方向、单导联位置、0.5 Hz 高通滤波和基线处理都会影响 ST 电平，**不能直接等同于 ST 抬高/压低、心肌缺血或心梗诊断**。
+3. **T 波极性**：比较 T 波主方向与主 QRS 方向。仅当 RR 间期 ≥0.60 s 且 T 波振幅足够时才投票；否则输出 `uncertain`。窄 QRS 时的 `t_wave_discordance` 只作为边界线索，因为宽 QRS 中的继发性 T 波改变、导联方向和电极位置都会造成类似表现。
+4. **QRS 振幅**：`qrs_amplitude_uv` 作为测量值输出；显著偏低只提示需同时确认电极接触和增益，不单独诊断低电压。
+
+#### 输出字段与含义
+
+| 字段 | 含义 |
+|------|------|
+| `qrst_status` | `normal` / `borderline` / `abnormal` / `unavailable` |
+| `qrst_status_label` | 中文筛查结论 |
+| `qrst_confidence` | `high` / `medium` / `low`，受信号质量、心搏数、心率和可评估范围影响 |
+| `qrst_scope` | `full` 表示 ST 与 T 波均可评估；`limited` 表示仅部分成分可评估；`unavailable` 表示无法评估 |
+| `qrst_findings` | 机器可读线索代码 |
+| `qrst_findings_cn` | 中文线索说明 |
+| `qrs_duration_ms` | 中位 QRS 宽度（启发式） |
+| `qrs_amplitude_uv` | 中位 QRS 振幅 |
+| `st_deviation_uv` | J+80 ms 的中位 ST 偏移；无法可靠测量时为 `null` |
+| `t_wave_polarity` | `concordant` / `discordant` / `mixed` / `uncertain` |
+| `qrst_beats_used` | 参与中位数统计的心搏数 |
+
+#### 必须遵守的边界
+
+- 这是**单导联形态筛查**，不是 12 导联心电图、不是心肌梗死/缺血/束支传导阻滞诊断。
+- 当前版本**不输出 QT/QTc**；仅依靠峰值位置的流程尚不能可靠识别 T 波终点。
+- 胸痛、晕厥、严重心悸、呼吸困难或持续不适时，应按急症流程处理，不能等待或依赖本筛查结果。
+- 任何 `abnormal`、`borderline` 或 `limited` 结果都应以电极复查、重复测量、12 导联 ECG 和医师判读确认；`limited` 下的 `normal` 只表示**可评估部分**未见明显异常，不代表完整 QRST 正常。
+
 ### 送入 LLM 的结构化指标
 
-`preprocess_for_llm` 将全部计算字段（心率/方法/分区/节律 CV/质量/市电/高频噪声/QRS 数/滤波后波形片段）序列化进 prompt，LLM 被要求直接采用系统心率、勿自行重算，并在信号质量差时降低 confidence。
+`preprocess_for_llm` 将全部计算字段（心率/方法/分区/节律 CV/质量/市电/高频噪声/QRS 数/QRST 筛查/滤波后波形片段）序列化进 prompt，LLM 被要求直接采用系统心率、勿自行重算；QRST 只能按单导联筛查证据使用，并在信号质量差或 `unavailable` 时降低 confidence、禁止臆测形态。
 
 ## 推荐界面
 

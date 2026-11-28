@@ -52,6 +52,13 @@ Real-time ECG visualization and AI-assisted interpretation for **ESP32 + ADS1292
 5. **HR zones**: <50 severe brady / 50–60 relative / 60–100 normal / 100–120 mild tachy / 120–150 tachy / >150 severe.
 6. **Source fusion**: device `hr` field and computed HR are fused only when they agree; normally a large disagreement trusts firmware as a sample-rate fallback, **except** during artifact correction, where the corrected low-frequency rate wins because firmware HR is derived from the same contaminated signal. `heart_rate_source` records which was used.
 
+
+### QRST morphology screening (conservative, non-diagnostic)
+
+When ordinary QRS peaks are trustworthy, the pipeline also computes a conservative single-lead QRST screen. It reports median heuristic QRS width, QRS amplitude, a J+80 ms ST-level estimate when the T wave is far enough away, and T-wave polarity relative to the dominant QRS. Outputs include `qrst_status` (`normal`/`borderline`/`abnormal`/`unavailable`), `qrst_scope` (`full`/`limited`/`unavailable`), confidence, machine-readable findings, and Chinese finding labels. A limited `normal` result means only the assessable components showed no obvious abnormality.
+
+Safety boundaries are explicit: artifact fallback disables QRST assessment; ST polarity is only relative to the displayed lead; high-rate T/P overlap makes ST or T output unavailable/uncertain; QT/QTc is not reported. The result is a screening hint requiring repeat measurement, electrode review, clinician interpretation, and usually a diagnostic 12-lead ECG—not a diagnosis.
+
 The LLM receives all structured metrics plus a filtered waveform snippet and is instructed to adopt the system HR rather than recompute it.
 
 ## Quick Start
